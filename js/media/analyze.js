@@ -19,7 +19,7 @@ export async function readStreamInfo(files) {
 /**
  * Keyframe times by listing packets with ffprobe (no decoding). Fallback for files the
  * MP4 index reader cannot handle, e.g. fragmented MP4.
- * @returns {Promise<number[]|null>}
+ * @returns {Promise<{keyframes:number[], packets:number}|null>}
  */
 export async function keyframesViaFfprobe(path) {
   const out = '/keyframes.txt';
@@ -27,8 +27,9 @@ export async function keyframesViaFfprobe(path) {
   let text = '';
   try { text = new TextDecoder().decode(await ffmpeg.readFile(out)); } catch { return null; }
   await ffmpeg.deleteFile(out);
-  const kf = text.split('\n').filter((l) => /,\s*K/.test(l)).map((l) => Number(l.split(',')[0])).filter(Number.isFinite).sort((a, b) => a - b);
-  return kf.length ? kf : null;
+  const rows = text.split('\n').filter((l) => /^-?[\d.]+,/.test(l));
+  const kf = rows.filter((l) => /,\s*K/.test(l)).map((l) => Number(l.split(',')[0])).filter(Number.isFinite).sort((a, b) => a - b);
+  return kf.length ? { keyframes: kf, packets: rows.length } : null;
 }
 
 /** Signature of what concat -c copy cares about: codec, profile, size, sample rate, channels. */

@@ -28,6 +28,29 @@ export function formatTime(sec, { decimals = 0, short = false } = {}) {
   return `${sign}${h}:${mm}:${ss}`;
 }
 
+/**
+ * Editor timecode with frames: 3910.5 s at 30 fps -> "1:05:10:15".
+ * short=true drops the hour when it is 0 ("05:10:15").
+ */
+export function formatTimecode(sec, fps = 30, { short = false } = {}) {
+  if (!Number.isFinite(sec)) return '--:--:--';
+  const rate = Math.max(1, Math.round(fps || 30));
+  const sign = sec < 0 ? '-' : '';
+  // count whole frames so rounding never shows a frame number equal to the rate
+  const total = Math.floor(Math.abs(sec) * rate + 1e-6);
+  const f = total % rate;
+  const s = Math.floor(total / rate);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  const p2 = (n) => String(n).padStart(2, '0');
+  if (short && h === 0) return `${sign}${p2(m)}:${p2(ss)}:${p2(f)}`;
+  return `${sign}${h}:${p2(m)}:${p2(ss)}:${p2(f)}`;
+}
+
+/** Snap a time to the start of the frame it falls in (plus a hair so seeking lands inside it). */
+export const toFrame = (sec, fps = 30) => Math.round(sec * fps) / fps;
+
 /** Human duration in Thai: 90 -> "1 นาที 30 วิ", 3725 -> "1 ชม. 2 นาที" */
 export function formatDuration(sec) {
   if (!Number.isFinite(sec)) return '-';

@@ -14,6 +14,11 @@ export class Timeline {
       f.end = acc;
     }
     this.duration = acc;
+    // frame rate used for stepping and timecodes (first file that knows it; common rates rounded)
+    const raw = this.files.find((f) => f.fps > 0)?.fps || 30;
+    const common = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60]
+      .map((r) => ({ r, d: Math.abs(r - raw) })).sort((x, y) => x.d - y.d).find((x) => x.d < 0.01)?.r;
+    this.fps = common || Math.round(raw * 100) / 100;
   }
 
   /** Global times where one file ends and the next begins. */

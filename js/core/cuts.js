@@ -18,7 +18,7 @@ const SNAP = 0.05;     // s: a new mark this close to an existing one reuses it
 export const emptyEdit = () => ({ marks: [], pieces: {} });
 
 const sortMarks = (marks) => [...marks].sort((a, b) => a.at - b.at);
-const round = (t) => Math.round(t * 100) / 100;
+const round = (t) => Math.round(t * 1000) / 1000;
 
 /** Pieces in time order: [{key, start, end, status, decided, confidence, reasons, origin, leftMark, rightMark}] */
 export function piecesOf(edit, duration) {

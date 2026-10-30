@@ -40,6 +40,16 @@ const P = {
   play: '<path d="M7 5v14l11-7z" fill="currentColor" stroke="none"/>',
   pause: '<path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor" stroke="none"/>',
   back: '<path d="M11 7l-5 5 5 5M18 7l-5 5 5 5"/>',
+  chev1L: '<path d="M14 6l-6 6 6 6"/>',
+  chev2L: '<path d="M11 6l-6 6 6 6M18 6l-6 6 6 6"/>',
+  chev3L: '<path d="M8 6l-6 6 6 6M14 6l-6 6 6 6M20 6l-6 6 6 6"/>',
+  chev1R: '<path d="M10 6l6 6-6 6"/>',
+  chev2R: '<path d="M6 6l6 6-6 6M13 6l6 6-6 6"/>',
+  chev3R: '<path d="M4 6l6 6-6 6M10 6l6 6-6 6M16 6l6 6-6 6"/>',
+  toStart: '<path d="M6 5v14M18 6l-8 6 8 6z"/>',
+  toEnd: '<path d="M18 5v14M6 6l8 6-8 6z"/>',
+  undo: '<path d="M9 7L4 12l5 5"/><path d="M4 12h10a6 6 0 0 1 0 12h-2" transform="translate(0 -6)"/>',
+  redo: '<path d="M15 7l5 5-5 5"/><path d="M20 12H10a6 6 0 0 0 0 12h2" transform="translate(0 -6)"/>',
   fwd: '<path d="M13 7l5 5-5 5M6 7l5 5-5 5"/>',
   scissors: '<circle cx="6" cy="7" r="2.5"/><circle cx="6" cy="17" r="2.5"/><path d="M8 8.5L19 18M8 15.5L19 6"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
@@ -84,7 +94,7 @@ export function ask({ title, body, buttons }) {
     const dlg = h('dialog.dlg',
       h('h2', title),
       body ? h('div.dlg-body', body) : null,
-      h('div.dlg-actions', buttons.map((b) => h(`button.${b.kind || 'secondary'}`, { onclick: () => { dlg.close(); resolve(b.value); } }, b.label))));
+      h('div.dlg-actions', buttons.map((b) => h(`button.${b.kind || 'secondary'}`, { autofocus: b.kind === 'primary', onclick: () => { dlg.close(); resolve(b.value); } }, b.label))));
     dlg.addEventListener('cancel', () => resolve(null));
     dlg.addEventListener('close', () => dlg.remove());
     document.body.append(dlg);

@@ -27,15 +27,18 @@ const STEPS = [
 ];
 
 let tlCache = { key: null, tl: null };
+// undo/redo history of the edit (cut points + piece states)
+const history = { past: [], future: [] };
+const HISTORY_MAX = 200;
 const app = {
   store,
 
   /** Timeline for the current video order (cached). */
   timeline() {
     const s = store.get();
-    const key = s.videos.map((v) => `${v.id}:${v.duration}:${v.keyframes ? v.keyframes.length : 0}`).join('|');
+    const key = s.videos.map((v) => `${v.id}:${v.duration}:${v.keyframes ? v.keyframes.length : 0}:${v.fps || 0}`).join('|');
     if (key !== tlCache.key) {
-      tlCache = { key, tl: new Timeline(s.videos.map((v) => ({ id: v.id, name: v.name, size: v.size, duration: v.duration || 0, keyframes: v.keyframes }))) };
+      tlCache = { key, tl: new Timeline(s.videos.map((v) => ({ id: v.id, name: v.name, size: v.size, duration: v.duration || 0, keyframes: v.keyframes, fps: v.fps }))) };
     }
     return tlCache.tl;
   },
@@ -66,6 +69,8 @@ const app = {
       const videos = c.videos.map((file) => ({ id: newId('v'), name: file.name, size: file.size, lastModified: file.lastModified, file, url: URL.createObjectURL(file) }));
       await Promise.all(videos.map(async (v) => Object.assign(v, await probeVideo(v))));
       store.reset({ source, videos, transcriptCandidates: c.transcripts, otherFiles: c.ignored.map((f) => f.name) });
+      history.past = [];
+      history.future = [];
 
       for (const t of c.transcripts) {
         if (await app.setTranscript(t, { quiet: true })) break;
@@ -152,8 +157,9 @@ const app = {
           const paths = await ffmpeg.mountInputs(s.videos.map((v) => v.file));
           const videos = await Promise.all(s.videos.map(async (v, i) => {
             if (v.keyframes || v.kfTried) return v;
-            const kf = await keyframesViaFfprobe(paths[i]).catch(() => null);
-            return { ...v, keyframes: kf, kfSource: kf ? 'ffprobe' : null, kfTried: true };
+            const r = await keyframesViaFfprobe(paths[i]).catch(() => null);
+            const fps = r && v.duration ? r.packets / v.duration : v.fps;
+            return { ...v, keyframes: r?.keyframes || null, kfSource: r ? 'ffprobe' : null, fps: v.fps || fps, kfTried: true };
           }));
           store.set({ videos });
         }
@@ -189,11 +195,35 @@ const app = {
       timeline: app.timeline(), transcript: s.transcript, anchors: s.anchors, anchorMode: s.anchorMode,
       analysis: s.analysis, settings: s.detectorSettings,
     });
-    store.set({ edit: applySuggestions(s.edit, suggestions, app.timeline().duration) });
+    app.commitEdit(applySuggestions(s.edit, suggestions, app.timeline().duration));
   },
 
   /** Apply an edit operation from core/cuts.js: app.updateEdit((e) => togglePiece(e, key)) */
-  updateEdit(fn) { store.set({ edit: fn(store.get().edit) }); },
+  updateEdit(fn) { app.commitEdit(fn(store.get().edit)); },
+
+  /** Replace the edit and remember the previous one for undo. `extra` is merged into the state too. */
+  commitEdit(next, extra = {}) {
+    const cur = store.get().edit;
+    if (next === cur) { if (Object.keys(extra).length) store.set(extra); return; }
+    history.past.push(cur);
+    if (history.past.length > HISTORY_MAX) history.past.shift();
+    history.future = [];
+    store.set({ edit: next, ...extra });
+  },
+  undo() {
+    if (!history.past.length) return false;
+    history.future.push(store.get().edit);
+    store.set({ edit: history.past.pop() });
+    return true;
+  },
+  redo() {
+    if (!history.future.length) return false;
+    history.past.push(store.get().edit);
+    store.set({ edit: history.future.pop() });
+    return true;
+  },
+  canUndo: () => history.past.length > 0,
+  canRedo: () => history.future.length > 0,
 
   /** Cut ranges and split points for the export plan. */
   planInput() { return toPlanInput(store.get().edit, app.timeline().duration); },

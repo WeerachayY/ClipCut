@@ -69,6 +69,20 @@ export class MultiPlayer extends EventTarget {
     this.#switchTo(index, local, play);
   }
 
+  /** Move by whole frames (pauses first, like every editor). */
+  stepFrames(n) {
+    if (!this.timeline) return;
+    const fps = this.timeline.fps || 30;
+    this.video.pause();
+    this.previewState = null;
+    const frame = Math.round(this.time * fps) + n;
+    // aim a little inside the frame so the decoder shows that frame, not the one before
+    this.seek(Math.max(0, frame / fps + 0.25 / fps));
+  }
+
+  /** Jump by seconds, keeping play/pause state. */
+  jump(seconds) { this.seek(this.time + seconds); }
+
   play() { this.video.play().catch(() => {}); }
   pause() { this.video.pause(); this.previewState = null; }
   toggle() { if (this.playing) this.pause(); else this.play(); }

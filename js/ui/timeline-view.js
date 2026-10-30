@@ -2,10 +2,10 @@
 // hatched "splice tape". Marks have a handle above the track that can be clicked or dragged.
 // A small command bar floats under whatever is selected.
 import { h, clear } from './dom.js';
-import { formatTime } from '../core/time.js';
+import { formatTime, formatTimecode } from '../core/time.js';
 
-const ZOOMS = [1, 2, 4, 8, 16, 32, 64, 128];
-const TICKS = [1, 2, 5, 10, 30, 60, 120, 300, 600, 900, 1800, 3600];
+const ZOOMS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048];
+const TICKS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600, 900, 1800, 3600];
 
 export class TimelineView {
   /**
@@ -34,10 +34,10 @@ export class TimelineView {
         h('span.tl-legend',
           h('span.sw.delete'), 'ทิ้ง', h('span.sw.high'), 'แนะนำให้ทิ้ง', h('span.sw.check'), 'ควรเช็ค', h('span.sw.mark'), 'จุดตัด', h('span.sw.split'), 'แยกไฟล์'),
         h('span.tl-zoom',
-          h('button.ghost.small', { type: 'button', onclick: () => this.setZoom(this.zoomIndex - 1), 'aria-label': 'ซูมออก' }, '−'),
+          h('button.ghost.small', { type: 'button', onclick: () => this.zoomOut(), 'aria-label': 'ซูมออก', 'data-tip': 'ซูมออก · Ctrl −' }, '−'),
           this.zoomLabel,
-          h('button.ghost.small', { type: 'button', onclick: () => this.setZoom(this.zoomIndex + 1), 'aria-label': 'ซูมเข้า' }, '+'),
-          h('button.ghost.small', { type: 'button', onclick: () => this.setZoom(0) }, 'พอดีจอ'))),
+          h('button.ghost.small', { type: 'button', onclick: () => this.zoomIn(), 'aria-label': 'ซูมเข้า', 'data-tip': 'ซูมเข้า · Ctrl + (หรือ Ctrl + ล้อเมาส์)' }, '+'),
+          h('button.ghost.small', { type: 'button', onclick: () => this.setZoom(0), 'data-tip': 'พอดีจอ · Ctrl 0' }, 'พอดีจอ'))),
       this.scroll);
 
     this.inner.addEventListener('pointerdown', (e) => this.#down(e));
@@ -52,7 +52,22 @@ export class TimelineView {
       this.#showHover(this.#timeAt(e.clientX));
     });
     this.inner.addEventListener('pointerleave', () => { if (!this.drag) this.hover.classList.remove('on'); });
+    // Ctrl + wheel zooms around the pointer, like most editors
+    this.scroll.addEventListener('wheel', (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      this.setZoom(this.zoomIndex + (e.deltaY < 0 ? 1 : -1), { t: this.#timeAt(e.clientX), clientX: e.clientX });
+    }, { passive: false });
+    let raf = 0;
+    this.scroll.addEventListener('scroll', () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => { this.#renderRuler(); this.#placeToolbar(); });
+    });
   }
+
+  get fps() { return this.data?.timeline.fps || 30; }
+  zoomIn() { this.setZoom(this.zoomIndex + 1, { t: this.lastT }); }
+  zoomOut() { this.setZoom(this.zoomIndex - 1, { t: this.lastT }); }
 
   #timeAt(clientX) {
     const r = this.inner.getBoundingClientRect();
@@ -64,7 +79,7 @@ export class TimelineView {
   #pct(t) { return `${(t / this.duration) * 100}%`; }
 
   #showHover(t) {
-    this.hover.textContent = formatTime(t, { decimals: this.zoomIndex >= 3 ? 1 : 0 });
+    this.hover.textContent = formatTimecode(t, this.fps, { short: this.duration < 3600 });
     this.hover.style.left = this.#pct(t);
     this.hover.classList.add('on');
   }
@@ -94,7 +109,7 @@ export class TimelineView {
     const move = (ev) => {
       if (!moved && Math.abs(ev.clientX - startX) < 3) return;
       moved = true;
-      t = Math.min(hi, Math.max(lo, this.#timeAt(ev.clientX)));
+      t = Math.min(hi, Math.max(lo, Math.round(this.#timeAt(ev.clientX) * this.fps) / this.fps));
       // snap to the playhead when close (8 px)
       const ph = this.cb.getPlayhead?.();
       const pxPerSec = this.inner.getBoundingClientRect().width / this.duration;
@@ -114,13 +129,20 @@ export class TimelineView {
     window.addEventListener('pointerup', up);
   }
 
-  setZoom(i) {
+  /** Change zoom; keeps `anchor.t` under `anchor.clientX` (or centred) so the view does not jump. */
+  setZoom(i, anchor = null) {
+    const prev = this.zoomIndex;
     this.zoomIndex = Math.max(0, Math.min(ZOOMS.length - 1, i));
+    if (this.zoomIndex === prev && anchor) return;
     const z = ZOOMS[this.zoomIndex];
     this.inner.style.width = `${z * 100}%`;
     this.zoomLabel.textContent = `${z}×`;
+    const t = anchor?.t ?? this.lastT;
+    const w = this.inner.clientWidth;
+    const viewX = anchor?.clientX != null ? anchor.clientX - this.scroll.getBoundingClientRect().left : this.scroll.clientWidth / 2;
+    this.scroll.scrollLeft = (t / this.duration) * w - viewX;
     if (this.data) this.#renderRuler();
-    this.#follow(this.lastT, true);
+    this.#placeToolbar();
   }
 
   /**
@@ -156,12 +178,21 @@ export class TimelineView {
   }
 
   #renderRuler() {
-    const width = this.scroll.clientWidth * ZOOMS[this.zoomIndex] || 800;
+    const width = this.inner.clientWidth || 800;
     const secPerPx = this.duration / width;
-    const step = TICKS.find((t) => t / secPerPx >= 90) || 3600;
+    const frame = 1 / this.fps;
+    const steps = [frame, ...TICKS.filter((t) => t > frame)];
+    const step = steps.find((t) => t / secPerPx >= 90) || 3600;
+    // only the visible stretch (plus one screen either side) gets tick labels
+    const view = this.scroll.clientWidth || width;
+    const from = Math.max(0, (this.scroll.scrollLeft - view) * secPerPx);
+    const to = Math.min(this.duration, (this.scroll.scrollLeft + 2 * view) * secPerPx);
     const ticks = [];
-    for (let t = 0; t <= this.duration + 1e-9; t += step) {
-      ticks.push(h('span.tl-tick', { style: { left: this.#pct(t) } }, formatTime(t, { short: this.duration < 3600 })));
+    const short = this.duration < 3600;
+    for (let k = Math.floor(from / step); k * step <= to + 1e-9; k++) {
+      const t = k * step;
+      const label = step < 1 ? formatTimecode(t, this.fps, { short }) : formatTime(t, { short });
+      ticks.push(h('span.tl-tick', { style: { left: this.#pct(t) } }, label));
     }
     clear(this.ruler, ticks);
   }
@@ -169,16 +200,23 @@ export class TimelineView {
   /** Float `el` under time t (or hide when el is null). */
   showToolbar(el, t) {
     clear(this.toolbarSlot);
+    this.toolbar = el ? { el, t } : null;
     if (!el) return;
     this.toolbarSlot.append(el);
     el.style.left = this.#pct(t);
-    requestAnimationFrame(() => {
-      const w = el.offsetWidth;
-      const innerW = this.inner.clientWidth;
-      const x = (t / this.duration) * innerW;
-      const left = Math.max(w / 2 + 4, Math.min(innerW - w / 2 - 4, x));
-      el.style.left = `${left}px`;
-    });
+    requestAnimationFrame(() => this.#placeToolbar());
+  }
+
+  /** Keep the floating bar inside the visible part of the strip. */
+  #placeToolbar() {
+    if (!this.toolbar) return;
+    const { el, t } = this.toolbar;
+    const w = el.offsetWidth;
+    const innerW = this.inner.clientWidth;
+    const lo = this.scroll.scrollLeft + w / 2 + 4;
+    const hi = this.scroll.scrollLeft + this.scroll.clientWidth - w / 2 - 4;
+    const x = (t / this.duration) * innerW;
+    el.style.left = `${Math.max(lo, Math.min(hi, x))}px`;
   }
 
   setTime(t) {

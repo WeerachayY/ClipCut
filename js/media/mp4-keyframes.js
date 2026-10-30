@@ -127,7 +127,9 @@ export function parseMoov(buf) {
       .filter((i) => i >= 0 && i < dts.length)
       .map((i) => (dts[i] + cto[i] + shift) / timescale)
       .sort((a, b) => a - b);
-    return { keyframes, timescale, duration: mediaDuration / timescale, samples: dts.length };
+    const span = dts.length > 1 ? (dts[dts.length - 1] - dts[0]) / timescale : 0;
+    const fps = span > 0 ? (dts.length - 1) / span : null;
+    return { keyframes, timescale, duration: mediaDuration / timescale, samples: dts.length, fps };
   }
   return null;
 }

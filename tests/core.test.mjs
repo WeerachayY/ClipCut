@@ -268,3 +268,15 @@ test('re-running detection replaces untouched suggestions and keeps decisions', 
   e = C.deleteAllSuggested(e, { onlyHigh: false });
   assert.equal(C.counts(e, D).delete, 2);
 });
+
+test('frame timecodes and timeline frame rate', async () => {
+  const { formatTimecode, toFrame } = await import('../js/core/time.js');
+  assert.equal(formatTimecode(3910.5, 30), '1:05:10:15');
+  assert.equal(formatTimecode(5.9999, 30, { short: true }), '00:05:29');
+  assert.equal(formatTimecode(1.5, 25), '0:00:01:12');
+  assert.equal(formatTimecode(0, 29.97), '0:00:00:00');
+  assert.equal(toFrame(5.017, 30), 151 / 30);
+  assert.equal(new Timeline([{ id: 'a', name: 'a', duration: 10, fps: 29.969 }]).fps, 29.97);
+  assert.equal(new Timeline([{ id: 'a', name: 'a', duration: 10, fps: 25.0004 }]).fps, 25);
+  assert.equal(new Timeline([{ id: 'a', name: 'a', duration: 10 }]).fps, 30);
+});

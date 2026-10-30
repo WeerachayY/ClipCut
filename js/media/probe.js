@@ -19,12 +19,13 @@ export function videoDuration(url) {
 
 /** @param {{file:File,url:string}} video */
 export async function probeVideo(video) {
-  const out = { duration: null, keyframes: null, kfSource: null, error: null, playable: true };
+  const out = { duration: null, keyframes: null, kfSource: null, fps: null, error: null, playable: true };
   try { out.duration = await videoDuration(video.url); } catch (e) { out.error = e.message; out.playable = false; }
   const k = await readMp4Keyframes(video.file);
   if (k) {
     out.keyframes = k.keyframes;
     out.kfSource = 'mp4';
+    out.fps = k.fps;
     if (!out.duration) out.duration = k.duration;
   }
   return out;
