@@ -1,6 +1,7 @@
 import { h, clear, icon, toast } from './dom.js';
 import { exportProfiles, getExportProfile } from '../core/registry.js';
 import { buildPlan, estimatePartBytes } from '../core/plan.js';
+import { counts } from '../core/cuts.js';
 import { formatTime, formatBytes, formatDuration } from '../core/time.js';
 import { runExport, partFileName, safeName, MAX_OUTPUT_BYTES } from '../media/export.js';
 import { ffmpeg } from '../media/ffmpeg.js';
@@ -49,7 +50,8 @@ export function mount(root, app) {
     const st = store.get();
     const tl = app.timeline();
     const profile = getExportProfile(st.exportProfile) || exportProfiles()[0];
-    const plan = buildPlan(tl, st.cuts, st.splits, { snap: profile.snapToKeyframes !== false });
+    const { cuts, splits } = app.planInput();
+    const plan = buildPlan(tl, cuts, splits, { snap: profile.snapToKeyframes !== false });
     const base = st.outputBase || defaultBase(st.videos);
     let writeOutput;
     let where;
@@ -115,14 +117,15 @@ export function mount(root, app) {
     const st = store.get();
     const tl = app.timeline();
     const profile = getExportProfile(st.exportProfile) || exportProfiles()[0];
-    const plan = buildPlan(tl, st.cuts, st.splits, { snap: profile.snapToKeyframes !== false });
+    const { cuts, splits } = app.planInput();
+    const plan = buildPlan(tl, cuts, splits, { snap: profile.snapToKeyframes !== false });
     const base = st.outputBase || defaultBase(st.videos);
-    const undecided = st.cuts.filter((c) => c.status === 'suggested');
+    const undecided = { length: counts(st.edit, tl.duration).suggested };
     const toFolder = st.source?.kind === 'folder';
     const sizes = plan.parts.map((p) => estimatePartBytes(p, tl));
 
     const warnings = [];
-    if (undecided.length) warnings.push(h('p.warn', icon('alert', 16), `ยังมี ${undecided.length} ช่วงที่ยังไม่ได้ตัดสินใจ ช่วงเหล่านี้จะไม่ถูกตัด `, h('button.ghost.small', { type: 'button', onclick: () => app.go('review') }, 'กลับไปตรวจ')));
+    if (undecided.length) warnings.push(h('p.warn', icon('alert', 16), `ยังมี ${undecided.length} ชิ้นที่แนะนำให้ทิ้งแต่ยังไม่ได้ตัดสินใจ ชิ้นเหล่านี้จะถูกเก็บไว้ `, h('button.ghost.small', { type: 'button', onclick: () => app.go('review') }, 'กลับไปตรวจ')));
     if (st.compat && !st.compat.ok && profile.id === 'copy') warnings.push(h('p.warn', icon('alert', 16), 'ไฟล์วิดีโอแต่ละไฟล์ถูกบันทึกด้วยการตั้งค่าต่างกัน การต่อแบบไม่บีบอัดอาจได้ไฟล์ที่เล่นไม่ปกติ ถ้าเจอปัญหาให้เลือกแบบบีบอัด'));
     if (!tl.hasKeyframes) warnings.push(h('p.warn', icon('alert', 16), 'อ่าน keyframe ของบางไฟล์ไม่ได้ ภาพอาจกระตุกสั้น ๆ ที่รอยตัด'));
     plan.warnings.forEach((w) => warnings.push(h('p.warn', icon('alert', 16), w.message)));

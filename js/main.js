@@ -4,7 +4,7 @@ import { createStore, newId, serializeProject, restoreProject, videosKey, PROJEC
 import { Timeline } from './core/timeline.js';
 import { findTranscriptParser, detectors } from './core/registry.js';
 import { suggestCuts } from './core/analysis.js';
-import { mergeSuggestions } from './core/cuts.js';
+import { applySuggestions, toPlanInput } from './core/cuts.js';
 import { dedupeLines } from './plugins/transcript/common.js';
 import { classifyFiles, pickFolder, filesFromDrop, writeFileTo, downloadBlob, ensureWritable } from './io/folder.js';
 import { probeVideo } from './media/probe.js';
@@ -79,12 +79,12 @@ const app = {
           b.close();
           const choice = await ask({
             title: 'พบงานที่ทำค้างไว้',
-            body: `บันทึกล่าสุด ${saved.savedAt ? new Date(saved.savedAt).toLocaleString('th-TH') : ''} มีช่วงตัด ${restored.cuts.length} ช่วง`,
+            body: `บันทึกล่าสุด ${saved.savedAt ? new Date(saved.savedAt).toLocaleString('th-TH') : ''} มีจุดตัด ${restored.edit.marks.length} จุด`,
             buttons: [{ label: 'เริ่มใหม่', value: 'new' }, { label: 'ทำต่อจากเดิม', value: 'resume', kind: 'primary' }],
           });
           if (choice === 'resume') {
             store.set(restored);
-            if (restored.cuts.length) { app.go('review'); return; }
+            if (restored.edit.marks.length) { app.go('review'); return; }
           }
         }
       }
@@ -189,10 +189,14 @@ const app = {
       timeline: app.timeline(), transcript: s.transcript, anchors: s.anchors, anchorMode: s.anchorMode,
       analysis: s.analysis, settings: s.detectorSettings,
     });
-    store.set({ cuts: mergeSuggestions(s.cuts, suggestions) });
+    store.set({ edit: applySuggestions(s.edit, suggestions, app.timeline().duration) });
   },
 
-  updateCuts(fn) { store.set({ cuts: fn(store.get().cuts) }); },
+  /** Apply an edit operation from core/cuts.js: app.updateEdit((e) => togglePiece(e, key)) */
+  updateEdit(fn) { store.set({ edit: fn(store.get().edit) }); },
+
+  /** Cut ranges and split points for the export plan. */
+  planInput() { return toPlanInput(store.get().edit, app.timeline().duration); },
 
   async saveNow({ download = false } = {}) {
     const s = store.get();
@@ -205,7 +209,7 @@ const app = {
 };
 
 // ---------- autosave (folder mode only) ----------
-const PERSISTED = ['videos', 'anchors', 'anchorMode', 'analysis', 'cuts', 'splits', 'detectorSettings', 'exportProfile', 'exportOptions', 'outputBase'];
+const PERSISTED = ['videos', 'anchors', 'anchorMode', 'analysis', 'edit', 'detectorSettings', 'exportProfile', 'exportOptions', 'outputBase'];
 let lastSnapshot = null;
 let saveTimer = 0;
 store.subscribe((s) => {
@@ -233,7 +237,7 @@ root.append(header, main);
 let current = { step: null, unmount: null };
 function renderShell(s) {
   const idx = STEPS.findIndex((x) => x.id === s.step);
-  const reachable = (id) => id === 'start' || (s.videos.length > 0 && (id !== 'review' && id !== 'export' ? true : s.cuts.length > 0 || s.analysisKey));
+  const reachable = (id) => id === 'start' || (s.videos.length > 0 && (id !== 'review' && id !== 'export' ? true : s.edit.marks.length > 0 || s.analysisKey));
   clear(stepNav, STEPS.map((st, i) => h(`li${i === idx ? '.current' : i < idx ? '.done' : ''}`,
     h('button', { type: 'button', disabled: !reachable(st.id) || i === idx, onclick: () => app.go(st.id), 'aria-current': i === idx ? 'step' : null },
       h('span.step-n', String(i + 1)), h('span.step-label', st.label)))));
@@ -262,7 +266,7 @@ window.addEventListener('drop', (e) => {
 
 window.addEventListener('beforeunload', (e) => {
   const s = store.get();
-  if (s.cuts.some((c) => c.status !== 'suggested') && s.source?.kind !== 'folder') { e.preventDefault(); e.returnValue = ''; }
+  if (s.edit.marks.length && s.source?.kind !== 'folder') { e.preventDefault(); e.returnValue = ''; }
 });
 
 // service worker for offline use

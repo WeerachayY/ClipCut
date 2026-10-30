@@ -178,22 +178,93 @@ test('folder classification picks videos in order and the transcript', async () 
 
 test('saved project restores only onto the same recordings', async () => {
   const { serializeProject, restoreProject, initialState } = await import('../js/core/store.js');
+  const { addMark, setPieceStatus, piecesOf } = await import('../js/core/cuts.js');
   const videos = [{ id: 'v1', name: 'b.mp4', size: 2, duration: 90 }, { id: 'v2', name: 'a.mp4', size: 1, duration: 120 }];
-  const s = { ...initialState(), videos: [videos[1], videos[0]], cuts: [{ id: 'c', start: 1, end: 9, status: 'accepted' }] };
+  let edit = addMark(initialState().edit, 1, 210).edit;
+  edit = addMark(edit, 9, 210).edit;
+  edit = setPieceStatus(edit, piecesOf(edit, 210)[1].key, 'delete');
+  const s = { ...initialState(), videos: [videos[1], videos[0]], edit };
   const saved = JSON.parse(JSON.stringify(serializeProject(s)));
   const r = restoreProject(saved, videos);
   assert.deepEqual(r.videos.map((v) => v.name), ['a.mp4', 'b.mp4']);
-  assert.equal(r.cuts.length, 1);
+  assert.equal(piecesOf(r.edit, 210)[1].status, 'delete');
   assert.equal(restoreProject(saved, [{ name: 'a.mp4', size: 999 }, videos[0]]), null);
 });
 
-test('re-suggesting keeps the user\'s decisions', async () => {
-  const { mergeSuggestions } = await import('../js/core/cuts.js');
-  const existing = [
-    { id: 'a', start: 10, end: 20, status: 'accepted', origin: 'auto' },
-    { id: 'b', start: 30, end: 40, status: 'suggested', origin: 'auto', edited: false },
-    { id: 'm', start: 50, end: 55, status: 'accepted', origin: 'manual' },
-  ];
-  const merged = mergeSuggestions(existing, [{ start: 12, end: 22, confidence: 'high', reasons: [] }, { start: 31, end: 45, confidence: 'check', reasons: [] }]);
-  assert.deepEqual(merged.map((c) => [c.start, c.end, c.status]), [[10, 20, 'accepted'], [31, 45, 'suggested'], [50, 55, 'accepted']]);
+test('v0.2 project files (cut ranges) open as cut points', async () => {
+  const { restoreProject } = await import('../js/core/store.js');
+  const { piecesOf, toPlanInput } = await import('../js/core/cuts.js');
+  const saved = {
+    app: 'clipcut', version: 1, videos: [{ name: 'a.mp4', size: 1, duration: 100 }],
+    cuts: [
+      { id: 'c1', start: 10, end: 20, status: 'accepted', origin: 'auto', confidence: 'high', reasons: ['x'] },
+      { id: 'c2', start: 40, end: 50, status: 'suggested', origin: 'auto', confidence: 'check' },
+      { id: 'c3', start: 60, end: 70, status: 'rejected', origin: 'auto' },
+    ],
+    splits: [{ id: 's', at: 80, label: 'Q&A' }],
+  };
+  const r = restoreProject(saved, [{ name: 'a.mp4', size: 1, duration: 100 }]);
+  const ps = piecesOf(r.edit, 100);
+  assert.deepEqual(ps.map((p) => [p.start, p.end, p.status]), [[0, 10, 'keep'], [10, 20, 'delete'], [20, 40, 'keep'], [40, 50, 'suggested'], [50, 60, 'keep'], [60, 70, 'keep'], [70, 80, 'keep'], [80, 100, 'keep']]);
+  const { cuts, splits } = toPlanInput(r.edit, 100);
+  assert.deepEqual(cuts.map((c) => [c.start, c.end]), [[10, 20]]);
+  assert.deepEqual(splits.map((x) => [x.at, x.label]), [[80, 'Q&A']]);
+});
+
+test('cut points: split a piece, throw it away, join back as kept', async () => {
+  const C = await import('../js/core/cuts.js');
+  const D = 100;
+  let e = C.emptyEdit();
+  let r = C.addMark(e, 30, D); e = r.edit; const m1 = r.id;
+  r = C.addMark(e, 60, D); e = r.edit; const m2 = r.id;
+  assert.equal(C.addMark(e, 30.02, D).id, m1, 'a cut next to an existing one reuses it');
+  assert.equal(C.addMark(e, 0.01, D).id, null, 'no cut at the very start');
+  let ps = C.piecesOf(e, D);
+  assert.deepEqual(ps.map((p) => [p.start, p.end, p.status]), [[0, 30, 'keep'], [30, 60, 'keep'], [60, 100, 'keep']]);
+  e = C.togglePiece(e, ps[1].key);
+  assert.deepEqual(C.toPlanInput(e, D).cuts.map((c) => [c.start, c.end]), [[30, 60]]);
+  // cutting inside a deleted piece: both halves stay deleted
+  e = C.addMark(e, 45, D).edit;
+  assert.deepEqual(C.piecesOf(e, D).map((p) => p.status), ['keep', 'delete', 'delete', 'keep']);
+  assert.deepEqual(C.toPlanInput(e, D).cuts.map((c) => [c.start, c.end]), [[30, 60]], 'adjacent deleted pieces export as one cut');
+  // joining a deleted piece with a kept one keeps the result
+  e = C.removeMark(e, m2);
+  ps = C.piecesOf(e, D);
+  assert.deepEqual(ps.map((p) => [p.start, p.end, p.status]), [[0, 30, 'keep'], [30, 45, 'delete'], [45, 100, 'keep']]);
+  // moving stays between neighbours
+  e = C.moveMark(e, m1, 50, D);
+  assert.equal(e.marks.find((m) => m.id === m1).at, 44.9);
+  e = C.nudgeMark(e, m1, -5, D);
+  assert.equal(e.marks.find((m) => m.id === m1).at, 39.9);
+  // a cut point can also start a new output file
+  e = C.setSplit(e, m1, true, 'ตอน 2');
+  assert.deepEqual(C.toPlanInput(e, D).splits.map((s) => [s.at, s.label]), [[39.9, 'ตอน 2']]);
+});
+
+test('re-running detection replaces untouched suggestions and keeps decisions', async () => {
+  const C = await import('../js/core/cuts.js');
+  const D = 200;
+  let e = C.applySuggestions(C.emptyEdit(), [
+    { start: 10, end: 20, confidence: 'high', reasons: ['a'] },
+    { start: 30, end: 40, confidence: 'check', reasons: ['b'] },
+    { start: 0, end: 5, confidence: 'check', reasons: ['lead'] },
+  ], D);
+  let ps = C.piecesOf(e, D);
+  assert.deepEqual(ps.filter((p) => p.status === 'suggested').map((p) => [p.start, p.end]), [[0, 5], [10, 20], [30, 40]]);
+  // user throws away the first, keeps the second (rejects the suggestion), adds a manual cut
+  e = C.setPieceStatus(e, ps.find((p) => p.start === 10).key, 'delete');
+  e = C.setPieceStatus(e, ps.find((p) => p.start === 30).key, 'keep');
+  e = C.addMark(e, 150, D).edit;
+  e = C.applySuggestions(e, [
+    { start: 11, end: 21, confidence: 'high', reasons: [] },
+    { start: 31, end: 45, confidence: 'high', reasons: [] },
+    { start: 100, end: 120, confidence: 'check', reasons: [] },
+  ], D);
+  ps = C.piecesOf(e, D);
+  assert.deepEqual(ps.filter((p) => p.hasRecord).map((p) => [p.start, p.end, p.status]), [[10, 20, 'delete'], [30, 40, 'keep'], [100, 120, 'suggested']]);
+  assert.ok(e.marks.some((m) => m.at === 150), 'manual cut kept');
+  assert.ok(!e.marks.some((m) => m.at === 5), 'stale automatic cut removed');
+  assert.equal(C.counts(e, D).suggested, 1);
+  e = C.deleteAllSuggested(e, { onlyHigh: false });
+  assert.equal(C.counts(e, D).delete, 2);
 });

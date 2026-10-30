@@ -1,13 +1,16 @@
 // Re-encode to H.264 + AAC with HandBrake-like quality presets (CRF).
 // Runs on the CPU inside the browser, so it is much slower than "copy": plan for roughly
 // real time or slower. Lower resolution and frame rate make it a lot faster.
+// Because every frame is re-encoded, cuts land exactly where they were marked (no keyframe snapping):
+// each kept segment is opened with an accurate input seek and the pieces are joined with the concat filter.
 export default {
   id: 'compress-h264',
   label: 'บีบอัดไฟล์ให้เล็กลง (H.264)',
-  description: 'คล้าย HandBrake ไฟล์เล็กลงมาก แต่ใช้เวลานานพอ ๆ กับความยาววิดีโอหรือมากกว่า',
+  description: 'คล้าย HandBrake ไฟล์เล็กลงมากและตัดตรงจุดเป๊ะ แต่ใช้เวลานานพอ ๆ กับความยาววิดีโอหรือมากกว่า',
   speed: 'slow',
   experimental: true,
-  snapToKeyframes: true,
+  snapToKeyframes: false,
+  needsStreamInfo: true,
   outputExtension: 'mp4',
   options: [
     {
@@ -31,21 +34,32 @@ export default {
       choices: [{ value: '128k', label: '128 kbps' }, { value: '96k', label: '96 kbps' }, { value: '64k', label: '64 kbps' }],
     },
   ],
-  buildArgs({ listPath, outPath, options }) {
+  /**
+   * @param {{outPath:string, options:object, segments:{fileIndex,inpoint,outpoint}[], inputPaths:string[], hasAudio:boolean}} a
+   */
+  buildArgs({ outPath, options, segments, inputPaths, hasAudio = true }) {
     const o = { height: '720', fps: '15', crf: '26', preset: 'veryfast', audio: '96k', ...options };
-    const vf = [];
-    if (o.height !== 'keep') vf.push(`scale=-2:'min(${o.height},ih)'`);
-    if (o.fps !== 'keep') vf.push(`fps=${o.fps}`);
-    vf.push('format=yuv420p');
-    return [
-      '-hide_banner',
-      '-f', 'concat', '-safe', '0', '-i', listPath,
-      '-map', '0:v:0?', '-map', '0:a:0?',
-      '-vf', vf.join(','),
-      '-c:v', 'libx264', '-preset', o.preset, '-crf', o.crf,
-      '-c:a', 'aac', '-b:a', o.audio,
-      '-movflags', '+faststart',
-      '-y', outPath,
-    ];
+    const v = [];
+    if (o.height !== 'keep') v.push(`scale=-2:'min(${o.height},ih)'`);
+    if (o.fps !== 'keep') v.push(`fps=${o.fps}`);
+    v.push('format=yuv420p', 'setsar=1');
+    const args = ['-hide_banner'];
+    segments.forEach((s) => {
+      args.push('-ss', s.inpoint.toFixed(3));
+      if (s.outpoint != null) args.push('-t', (s.outpoint - s.inpoint).toFixed(3));
+      args.push('-i', inputPaths[s.fileIndex]);
+    });
+    let fc = '';
+    let pads = '';
+    segments.forEach((_, i) => {
+      fc += `[${i}:v:0]${v.join(',')}[v${i}];`;
+      if (hasAudio) fc += `[${i}:a:0]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a${i}];`;
+      pads += `[v${i}]${hasAudio ? `[a${i}]` : ''}`;
+    });
+    fc += `${pads}concat=n=${segments.length}:v=1:a=${hasAudio ? 1 : 0}[v]${hasAudio ? '[a]' : ''}`;
+    args.push('-filter_complex', fc, '-map', '[v]');
+    if (hasAudio) args.push('-map', '[a]', '-c:a', 'aac', '-b:a', o.audio);
+    args.push('-c:v', 'libx264', '-preset', o.preset, '-crf', o.crf, '-movflags', '+faststart', '-y', outPath);
+    return args;
   },
 };

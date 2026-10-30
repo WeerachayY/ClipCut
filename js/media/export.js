@@ -1,6 +1,7 @@
 // Executes an export plan part by part with the chosen export profile.
 import { buildConcatList, estimatePartBytes } from '../core/plan.js';
 import { ffmpeg } from './ffmpeg.js';
+import { readStreamInfo } from './analyze.js';
 
 export const MAX_OUTPUT_BYTES = 1.9 * 1024 ** 3; // browser memory ceiling for one output file
 
@@ -33,6 +34,11 @@ export async function runExport({ plan, timeline, files, profile, options, outpu
   }
   await ffmpeg.load((m) => onProgress?.({ part: 0, parts: parts.length, ratio: 0, speed: null, message: m }));
   const paths = await ffmpeg.mountInputs(files);
+  let hasAudio = true;
+  if (profile.needsStreamInfo) {
+    const info = await readStreamInfo(files);
+    hasAudio = info.every((streams) => streams.some((x) => x.startsWith('Audio')));
+  }
   const results = [];
   for (const part of parts) {
     const listPath = `/list${part.index}.txt`;
@@ -50,7 +56,8 @@ export async function runExport({ plan, timeline, files, profile, options, outpu
       });
     };
     report(0);
-    const { code, log } = await ffmpeg.run(profile.buildArgs({ listPath, outPath, options }), { onTime: report });
+    const args = profile.buildArgs({ listPath, outPath, options, segments: part.segments, inputPaths: paths, hasAudio });
+    const { code, log } = await ffmpeg.run(args, { onTime: report });
     if (code !== 0) {
       await ffmpeg.deleteFile(outPath);
       const tail = log.filter((l) => !/^\s*(frame|size)=/.test(l)).slice(-6).join('\n');

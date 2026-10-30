@@ -1,19 +1,20 @@
+// Review screen: player, timeline with cut points, list of pieces to throw away, transcript sync.
 import { h, clear, icon, toast } from './dom.js';
 import { MultiPlayer } from './player.js';
 import { TimelineView } from './timeline-view.js';
 import { formatTime, formatDuration } from '../core/time.js';
-import { effectiveCut, buildPlan } from '../core/plan.js';
-import { setStatus, nudge, setEdge, addManual, removeCut, acceptAllHigh, counts } from '../core/cuts.js';
+import { buildPlan } from '../core/plan.js';
+import * as C from '../core/cuts.js';
 import { mapLines, proposeAnchors } from '../core/analysis.js';
 import { newId } from '../core/store.js';
 
-const CONF_LABEL = { high: 'แนะนำ', check: 'ควรเช็ค', manual: 'เพิ่มเอง' };
+const BADGE = { delete: 'ทิ้ง', high: 'แนะนำให้ทิ้ง', check: 'ควรเช็ค', rejected: 'เก็บไว้' };
+const kindOf = (p) => (p.status === 'delete' ? 'delete' : p.status === 'suggested' ? (p.confidence === 'high' ? 'high' : 'check') : p.decided && p.origin === 'auto' ? 'rejected' : 'keep');
 
 export function mount(root, app) {
   const store = app.store;
   let tl = app.timeline();
-  let markIn = null;
-  let sideView = 'cuts';
+  let sideView = 'pieces';
   let follow = true;
   let seam = 5;
   let lines = [];
@@ -27,7 +28,6 @@ export function mount(root, app) {
   const fileTag = h('span.file-tag');
   const timeLabel = h('span.time-now', '0:00:00');
   const playBtn = h('button.primary.icon-only.play', { type: 'button', onclick: () => player.toggle(), 'aria-label': 'เล่น/หยุด (Space)' }, icon('play', 20));
-  const markLabel = h('span.mark-label');
   const skipBox = h('input', { type: 'checkbox', onchange: (e) => { player.skipRanges = e.target.checked ? skipRanges : null; } });
   const rateSel = h('select', { 'aria-label': 'ความเร็ว', onchange: (e) => player.setRate(Number(e.target.value)) },
     ['1', '1.5', '2', '4'].map((r) => h('option', { value: r }, `${r}×`)));
@@ -45,25 +45,26 @@ export function mount(root, app) {
       h('span.time', timeLabel, h('span.time-total', ` / ${formatTime(tl.duration)}`)),
       rateSel),
     h('div.tp-group',
-      h('button.secondary.small', { type: 'button', onclick: () => markInOut('in'), title: 'ปุ่มลัด I' }, icon('scissors', 16), 'เริ่มช่วงตัด'),
-      h('button.secondary.small', { type: 'button', onclick: () => markInOut('out'), title: 'ปุ่มลัด O' }, 'จบช่วงตัด'),
-      h('button.secondary.small', { type: 'button', onclick: addSplit, title: 'ปุ่มลัด S' }, icon('split', 16), 'แบ่งไฟล์ที่นี่'),
-      markLabel),
+      h('button.secondary.mark-btn', { type: 'button', onclick: () => markHere(), title: 'ปุ่มลัด C' }, icon('scissors', 17), 'มาร์กจุดตัด', h('kbd', 'C'))),
     h('div.tp-group.tp-right',
-      h('label.tick.small', skipBox, h('span', 'เล่นแบบผลลัพธ์ (ข้ามช่วงที่ตัด)')),
+      h('label.tick.small', skipBox, h('span', 'เล่นแบบผลลัพธ์ (ข้ามชิ้นที่ทิ้ง)')),
       seamSel,
       h('button.ghost.icon-only', { type: 'button', onclick: showKeys, 'aria-label': 'ปุ่มลัด' }, icon('keyboard'))));
 
   const timelineView = new TimelineView({
     onSeek: (t) => player.seek(t),
-    onSelectCut: (id) => select(id, true),
+    onSelectPiece: (key) => select({ type: 'piece', key }),
+    onActivatePiece: (key) => { select({ type: 'piece', key }); act('toggle'); },
+    onSelectMark: (id) => { const m = mark(id); if (m) player.seek(m.at); select({ type: 'mark', id }); },
+    onMoveMark: (id, t) => edit((e) => C.moveMark(e, id, t, tl.duration)),
+    getPlayhead: () => player.time,
   });
 
   // ---------- side panel ----------
-  const segCuts = h('button', { type: 'button', role: 'tab', onclick: () => { sideView = 'cuts'; renderSide(); } });
+  const segPieces = h('button', { type: 'button', role: 'tab', onclick: () => { sideView = 'pieces'; renderSide(); } });
   const segSync = h('button', { type: 'button', role: 'tab', onclick: () => { sideView = 'sync'; renderSide(); } });
   const sideBody = h('div.side-body');
-  const side = h('aside.rv-side', h('div.seg', { role: 'tablist' }, segCuts, segSync), sideBody);
+  const side = h('aside.rv-side', h('div.seg', { role: 'tablist' }, segPieces, segSync), sideBody);
 
   const summary = h('div.next-summary');
   const nextBar = h('div.next-bar',
@@ -77,6 +78,22 @@ export function mount(root, app) {
 
   // ---------- helpers ----------
   const s = () => store.get();
+  const D = () => tl.duration;
+  const pieces = () => C.piecesOf(s().edit, D());
+  const marks = () => [...s().edit.marks].sort((a, b) => a.at - b.at);
+  const mark = (id) => s().edit.marks.find((m) => m.id === id);
+  const piece = (key) => pieces().find((p) => p.key === key);
+  const edit = (fn) => app.updateEdit(fn);
+  /** where lossless export resumes after a thrown-away piece (keyframe at or before its end) */
+  const resumeAt = (p) => Math.max(p.start, tl.snapDown(p.end));
+
+  function skipRanges() {
+    return pieces().filter((p) => p.status === 'delete').map((p) => ({ start: p.start, end: resumeAt(p) }));
+  }
+  function select(sel) {
+    store.set({ selection: sel });
+    if (sel && sel.type === 'piece') sideView = 'pieces';
+  }
   function scrollWithin(container, el, center) {
     const c = container.getBoundingClientRect();
     const r = el.getBoundingClientRect();
@@ -84,99 +101,155 @@ export function mount(root, app) {
     else if (r.top < c.top) container.scrollTop -= c.top - r.top + 8;
     else if (r.bottom > c.bottom) container.scrollTop += r.bottom - c.bottom + 8;
   }
-  const eff = (c) => effectiveCut(tl, c);
-  function skipRanges() {
-    return s().cuts.filter((c) => c.status === 'accepted').map((c) => ({ start: c.start, end: eff(c).effectiveEnd }));
-  }
-  function select(id, seek) {
-    store.set({ selectedCutId: id });
-    const c = s().cuts.find((x) => x.id === id);
-    if (c && seek) player.seek(c.start);
-    sideView = 'cuts';
-  }
-  function preview(c) {
-    select(c.id, false);
-    player.previewSeam(c.start, eff(c).effectiveEnd, { before: seam, after: seam });
-  }
-  function markInOut(which) {
+
+  function markHere({ split = false } = {}) {
     const t = player.time;
-    if (which === 'in') { markIn = t; markLabel.textContent = `เริ่มช่วงตัดที่ ${formatTime(t)} แล้วกด “จบช่วงตัด” ที่จุดจบ`; return; }
-    if (markIn == null) { toast('กด “เริ่มช่วงตัด” (I) ที่จุดเริ่มก่อน'); return; }
-    const res = addManual(s().cuts, markIn, t);
-    markIn = null;
-    markLabel.textContent = '';
-    if (!res.id) { toast('ช่วงตัดสั้นเกินไป'); return; }
-    store.set({ cuts: res.cuts, selectedCutId: res.id });
+    const r = C.addMark(s().edit, t, D(), { split, label: split ? `ตอนที่ ${C.toPlanInput(s().edit, D()).splits.length + 2}` : '' });
+    if (!r.id) { toast('ตรงนี้อยู่ต้นหรือท้ายวิดีโอ ไม่ต้องมาร์ก'); return; }
+    store.set({ edit: r.edit, selection: { type: 'mark', id: r.id } });
   }
-  function addSplit() {
-    const at = Math.round(player.time * 10) / 10;
-    const n = s().splits.length + 2;
-    store.set({ splits: [...s().splits, { id: newId('s'), at, label: `ช่วงที่ ${n}` }].sort((a, b) => a.at - b.at) });
-    toast(`แบ่งไฟล์ที่ ${formatTime(at)}`);
+
+  function preview(p) {
+    if (p.status === 'keep') { player.seek(p.start, { play: true }); return; }
+    player.previewSeam(p.start, resumeAt(p), { before: seam, after: seam });
   }
+
+  /** Commands on the current selection; used by buttons, the floating bar and shortcuts. */
+  function act(cmd) {
+    const sel = s().selection;
+    if (!sel) return;
+    if (sel.type === 'piece') {
+      const p = piece(sel.key);
+      if (!p) return;
+      if (cmd === 'toggle') edit((e) => (p.status === 'suggested' ? C.setPieceStatus(e, p.key, 'delete') : C.togglePiece(e, p.key)));
+      if (cmd === 'delete') edit((e) => C.setPieceStatus(e, p.key, 'delete'));
+      if (cmd === 'keep') edit((e) => C.setPieceStatus(e, p.key, 'keep'));
+      if (cmd === 'preview') preview(p);
+      if (cmd === 'start-here' && p.leftMark) edit((e) => C.moveMark(e, p.leftMark.id, player.time, D()));
+      if (cmd === 'end-here' && p.rightMark) edit((e) => C.moveMark(e, p.rightMark.id, player.time, D()));
+    } else {
+      const m = mark(sel.id);
+      if (!m) return;
+      if (cmd === 'join') {
+        const left = pieces().find((p) => p.rightMark?.id === m.id);
+        store.set({ edit: C.removeMark(s().edit, m.id), selection: left ? { type: 'piece', key: left.key } : null });
+        toast('ต่อกลับเป็นชิ้นเดียวแล้ว (ชิ้นที่ต่อจะถูกเก็บไว้)');
+      }
+      if (cmd === 'split') edit((e) => C.setSplit(e, m.id, !m.split, m.label || `ตอนที่ ${C.toPlanInput(e, D()).splits.length + 2}`));
+      if (cmd === 'preview') player.previewSeam(m.at, m.at, { before: seam, after: seam });
+      if (cmd === 'here') edit((e) => C.moveMark(e, m.id, player.time, D()));
+    }
+  }
+
   function showKeys() {
     toast(h('div.keys',
       h('strong', 'ปุ่มลัด'),
       h('div', 'Space เล่น/หยุด · ← → 5 วิ · Shift+← → 1 วิ'),
-      h('div', 'I เริ่มช่วงตัด · O จบช่วงตัด · S แบ่งไฟล์'),
-      h('div', 'J / K ช่วงก่อนหน้า/ถัดไป · P ฟังรอยต่อ'),
-      h('div', 'A ตัด · R ไม่ตัด · [ ] ตั้งขอบเริ่ม/จบจากตำแหน่งเล่น')), 'info', 12000);
+      h('div', 'C หรือ B มาร์กจุดตัดที่ตำแหน่งเล่น'),
+      h('div', 'คลิกชิ้นบน timeline เพื่อเลือก · ดับเบิลคลิกเพื่อทิ้ง/เก็บ'),
+      h('div', 'Delete ทิ้ง/เก็บชิ้นที่เลือก หรือต่อกลับจุดตัดที่เลือก'),
+      h('div', 'A ทิ้ง · R เก็บ · P ฟังรอยต่อ · J / K ชิ้นก่อน/ถัดไป'),
+      h('div', 'S แยกไฟล์ที่จุดตัดที่เลือก · [ ] ขยับขอบชิ้นมาที่ตำแหน่งเล่น · Esc ยกเลิกการเลือก')), 'info', 14000);
   }
 
-  // ---------- side: cuts ----------
-  function cutRow(c, selected) {
-    const e = eff(c);
-    const kind = c.status === 'suggested' ? (c.confidence === 'high' ? 'high' : 'check') : c.status;
-    const D = tl.duration;
-    const upd = (fn) => app.updateCuts(fn);
-    const edgeCtl = (edge, label) => h('div.edge',
+  // ---------- floating command bar ----------
+  function toolbar() {
+    const sel = s().selection;
+    if (!sel) return null;
+    const btn = (label, cmd, cls = 'secondary', ic) => h(`button.small.${cls}`, { type: 'button', onclick: () => act(cmd) }, ic ? icon(ic, 15) : null, label);
+    if (sel.type === 'piece') {
+      const p = piece(sel.key);
+      if (!p) return null;
+      const info = h('span.tb-info', `${formatTime(p.start)}–${formatTime(p.end)} · ${formatDuration(p.end - p.start)}`);
+      if (p.status === 'delete') return { t: (p.start + p.end) / 2, el: h('div.tl-toolbar', info, btn('เก็บชิ้นนี้', 'keep'), btn('ฟังรอยต่อ', 'preview', 'secondary', 'ear')) };
+      if (p.status === 'suggested') return { t: (p.start + p.end) / 2, el: h('div.tl-toolbar', info, btn('ทิ้ง', 'delete', 'danger-fill', 'scissors'), btn('เก็บ', 'keep'), btn('ฟังรอยต่อ', 'preview', 'secondary', 'ear')) };
+      return { t: (p.start + p.end) / 2, el: h('div.tl-toolbar', info, btn('ทิ้งชิ้นนี้', 'delete', 'danger-fill', 'scissors')) };
+    }
+    const m = mark(sel.id);
+    if (!m) return null;
+    return {
+      t: m.at,
+      el: h('div.tl-toolbar',
+        h('span.tb-info', `จุดตัด ${formatTime(m.at, { decimals: 1 })}`),
+        btn('ต่อกลับ', 'join'),
+        btn(m.split ? 'ยกเลิกแยกไฟล์' : 'แยกเป็นไฟล์ใหม่ตรงนี้', 'split', 'secondary', 'split'),
+        h('button.ghost.small', { type: 'button', onclick: () => edit((e) => C.nudgeMark(e, m.id, -1, D())) }, '−1'),
+        h('button.ghost.small', { type: 'button', onclick: () => edit((e) => C.nudgeMark(e, m.id, 1, D())) }, '+1'),
+        btn('ฟัง', 'preview', 'ghost', 'ear')),
+    };
+  }
+
+  // ---------- side: pieces ----------
+  function edgeCtl(p, which) {
+    const m = which === 'start' ? p.leftMark : p.rightMark;
+    const label = which === 'start' ? 'จุดเริ่ม' : 'จุดจบ';
+    if (!m) return h('div.edge', h('span.edge-label', label), h('span.hint', which === 'start' ? 'ต้นวิดีโอ' : 'ท้ายวิดีโอ'));
+    return h('div.edge',
       h('span.edge-label', label),
-      h('button.ghost.small', { type: 'button', onclick: () => upd((cs) => nudge(cs, c.id, edge, -5, D)) }, '−5'),
-      h('button.ghost.small', { type: 'button', onclick: () => upd((cs) => nudge(cs, c.id, edge, -1, D)) }, '−1'),
-      h('button.ghost.small.tc', { type: 'button', onclick: () => player.seek(c[edge]), title: 'ไปที่จุดนี้' }, formatTime(c[edge], { decimals: 1 })),
-      h('button.ghost.small', { type: 'button', onclick: () => upd((cs) => nudge(cs, c.id, edge, 1, D)) }, '+1'),
-      h('button.ghost.small', { type: 'button', onclick: () => upd((cs) => nudge(cs, c.id, edge, 5, D)) }, '+5'),
-      h('button.ghost.icon-only', { type: 'button', onclick: () => upd((cs) => setEdge(cs, c.id, edge, player.time, D)), title: `ใช้ตำแหน่งเล่นตอนนี้ (ปุ่มลัด ${edge === 'start' ? '[' : ']'})`, 'aria-label': `ตั้ง${label}จากตำแหน่งเล่น` }, icon('target', 16)));
-
-    return h(`li.cut-row.${kind}${selected ? '.selected' : ''}`, { dataset: { id: c.id } },
-      h('div.cut-head', { onclick: () => select(c.id, true) },
-        h('span.badge', c.status === 'accepted' ? 'ตัด' : c.status === 'rejected' ? 'เก็บไว้' : CONF_LABEL[c.confidence] || 'แนะนำ'),
-        h('span.cut-time', `${formatTime(c.start)} – ${formatTime(c.end)}`),
-        h('span.cut-len', formatDuration(c.end - c.start))),
-      h('div.cut-reasons', (c.reasons || []).join(' · ')),
-      h('div.cut-actions',
-        h('button.secondary.small', { type: 'button', onclick: () => preview(c), title: 'ปุ่มลัด P' }, icon('ear', 16), 'ฟังรอยต่อ'),
-        h(`button.small.${c.status === 'accepted' ? 'on-cut' : 'secondary'}`, { type: 'button', 'aria-pressed': String(c.status === 'accepted'), onclick: () => upd((cs) => setStatus(cs, c.id, c.status === 'accepted' ? 'suggested' : 'accepted')) }, icon('scissors', 15), 'ตัด'),
-        h(`button.small.${c.status === 'rejected' ? 'on-keep' : 'secondary'}`, { type: 'button', 'aria-pressed': String(c.status === 'rejected'), onclick: () => upd((cs) => setStatus(cs, c.id, c.status === 'rejected' ? 'suggested' : 'rejected')) }, 'ไม่ตัด')),
-      selected ? h('div.cut-edit',
-        edgeCtl('start', 'จุดเริ่ม'),
-        edgeCtl('end', 'จุดจบ'),
-        e.shifted > 0.05 ? h('p.hint', `วิดีโอจะกลับมาเล่นที่ ${formatTime(e.effectiveEnd, { decimals: 1 })} (เร็วกว่าจุดจบ ${e.shifted.toFixed(1)} วิ ตาม keyframe เพื่อไม่ให้เนื้อหาหาย)`) : null,
-        e.ineffective ? h('p.warn', icon('alert', 16), 'ช่วงนี้สั้นกว่าระยะห่างของ keyframe จึงตัดแบบไม่ encode ใหม่ไม่ได้') : null,
-        h('button.ghost.small.danger', { type: 'button', onclick: () => upd((cs) => removeCut(cs, c.id)) }, icon('trash', 15), 'ลบช่วงนี้')) : null);
+      h('button.ghost.small', { type: 'button', onclick: () => edit((e) => C.nudgeMark(e, m.id, -5, D())) }, '−5'),
+      h('button.ghost.small', { type: 'button', onclick: () => edit((e) => C.nudgeMark(e, m.id, -1, D())) }, '−1'),
+      h('button.ghost.small.tc', { type: 'button', onclick: () => player.seek(m.at), title: 'ไปที่จุดนี้' }, formatTime(m.at, { decimals: 1 })),
+      h('button.ghost.small', { type: 'button', onclick: () => edit((e) => C.nudgeMark(e, m.id, 1, D())) }, '+1'),
+      h('button.ghost.small', { type: 'button', onclick: () => edit((e) => C.nudgeMark(e, m.id, 5, D())) }, '+5'),
+      h('button.ghost.icon-only', { type: 'button', onclick: () => edit((e) => C.moveMark(e, m.id, player.time, D())), title: `ย้ายมาที่ตำแหน่งเล่น (ปุ่มลัด ${which === 'start' ? '[' : ']'})`, 'aria-label': `ย้าย${label}มาที่ตำแหน่งเล่น` }, icon('target', 16)),
+      h('button.ghost.small', { type: 'button', onclick: () => { select({ type: 'mark', id: m.id }); act('join'); }, title: 'ลบจุดตัดนี้ ชิ้นสองข้างรวมกันและถูกเก็บไว้' }, 'ต่อกลับ'));
   }
 
-  function renderCuts() {
+  function pieceRow(p, selected) {
+    const kind = kindOf(p);
+    const resume = resumeAt(p);
+    const shifted = p.end - resume;
+    return h(`li.cut-row.${kind}${selected ? '.selected' : ''}`, { dataset: { key: p.key } },
+      h('div.cut-head', { onclick: () => { select({ type: 'piece', key: p.key }); player.seek(p.start); } },
+        h('span.badge', BADGE[kind] || 'เก็บ'),
+        h('span.cut-time', `${formatTime(p.start)} – ${formatTime(p.end)}`),
+        h('span.cut-len', formatDuration(p.end - p.start))),
+      p.reasons.length ? h('div.cut-reasons', p.reasons.join(' · ')) : h('div.cut-reasons', p.origin === 'auto' ? '' : 'มาร์กเอง'),
+      h('div.cut-actions',
+        h('button.secondary.small', { type: 'button', onclick: () => { select({ type: 'piece', key: p.key }); preview(p); }, title: 'ปุ่มลัด P' }, icon('ear', 16), 'ฟังรอยต่อ'),
+        h(`button.small.${p.status === 'delete' ? 'on-cut' : 'secondary'}`, { type: 'button', 'aria-pressed': String(p.status === 'delete'), onclick: () => edit((e) => C.setPieceStatus(e, p.key, 'delete')) }, icon('scissors', 15), 'ทิ้ง'),
+        h(`button.small.${kind === 'rejected' || (p.decided && p.status === 'keep') ? 'on-keep' : 'secondary'}`, { type: 'button', onclick: () => edit((e) => C.setPieceStatus(e, p.key, 'keep')) }, 'เก็บ')),
+      selected ? h('div.cut-edit',
+        edgeCtl(p, 'start'),
+        edgeCtl(p, 'end'),
+        p.status === 'delete' && shifted > 0.05 && shifted < p.end - p.start - 0.05
+          ? h('p.hint', `แบบไม่บีบอัด วิดีโอจะกลับมาเล่นที่ ${formatTime(resume, { decimals: 1 })} (เร็วกว่าจุดจบ ${shifted.toFixed(1)} วิ ตาม keyframe เพื่อไม่ให้เนื้อหาหาย) แบบบีบอัดตัดตรงจุดเป๊ะ`) : null,
+        p.status === 'delete' && resume - p.start < 0.1
+          ? h('p.warn', icon('alert', 16), 'ชิ้นนี้สั้นกว่าระยะห่างของ keyframe แบบไม่บีบอัดจะตัดชิ้นนี้ไม่ได้ ถ้าต้องการตัดให้ส่งออกแบบบีบอัด') : null) : null);
+  }
+
+  function renderPieces() {
     const st = s();
-    const n = counts(st.cuts);
-    const plan = buildPlan(tl, st.cuts, st.splits);
-    const splitRows = st.splits.map((sp) => h('li.split-row',
-      h('button.ghost.small.tc', { type: 'button', onclick: () => player.seek(sp.at) }, formatTime(sp.at)),
-      h('input', { type: 'text', value: sp.label || '', 'aria-label': 'ชื่อช่วง', onchange: (e) => store.set({ splits: s().splits.map((x) => (x.id === sp.id ? { ...x, label: e.target.value } : x)) }) }),
-      h('button.ghost.icon-only', { type: 'button', 'aria-label': 'ลบจุดแบ่ง', onclick: () => store.set({ splits: s().splits.filter((x) => x.id !== sp.id) }) }, icon('trash', 15))));
+    const ps = C.piecesOf(st.edit, D());
+    const n = C.counts(st.edit, D());
+    const { cuts, splits } = C.toPlanInput(st.edit, D());
+    const plan = buildPlan(tl, cuts, splits);
+    const listed = ps.filter((p) => kindOf(p) !== 'keep' || (st.selection?.type === 'piece' && st.selection.key === p.key));
+    const sel = st.selection;
+    const splitMarks = marks().filter((m) => m.split);
     clear(sideBody,
       h('div.cut-summary',
-        h('div.big-num', formatTime(plan.removedDuration), h('span', ' ตัดออก')),
+        h('div.big-num', formatTime(plan.removedDuration), h('span', ' ทิ้ง')),
         h('div.hint', `เหลือ ${formatTime(plan.keptDuration)} จาก ${formatTime(tl.duration)}${plan.parts.length > 1 ? ` · ${plan.parts.length} ไฟล์` : ''}`),
-        h('div.hint', `ตัด ${n.accepted} · รอตัดสินใจ ${n.suggested} · เก็บไว้ ${n.rejected}`),
-        n.high ? h('button.secondary.small', { type: 'button', onclick: () => app.updateCuts(acceptAllHigh) }, icon('check', 15), `ตัดทุกช่วงที่แนะนำ (${n.high})`) : null),
-      st.cuts.length
-        ? h('ul.cut-list', st.cuts.map((c) => cutRow(c, c.id === st.selectedCutId)))
-        : h('p.empty', 'ยังไม่มีช่วงตัด กด “เริ่มช่วงตัด” และ “จบช่วงตัด” ระหว่างดูวิดีโอเพื่อเพิ่มเอง'),
-      h('h3', 'จุดแบ่งไฟล์'),
-      st.splits.length ? h('ul.split-list', splitRows) : h('p.hint', 'กด “แบ่งไฟล์ที่นี่” (S) เพื่อแยกวิดีโอเป็นหลายไฟล์ เช่น แยกตามหัวข้อ'));
-    const sel = sideBody.querySelector('.cut-row.selected');
-    if (sel) scrollWithin(sideBody, sel, false);
+        h('div.hint', `จุดตัด ${n.marks} · ทิ้ง ${n.delete} ชิ้น · รอตัดสินใจ ${n.suggested} · เก็บไว้ ${n.rejected}`),
+        n.high ? h('button.secondary.small', { type: 'button', onclick: () => edit((e) => C.deleteAllSuggested(e)) }, icon('check', 15), `ทิ้งทุกชิ้นที่แนะนำ (${n.high})`) : null),
+      listed.length
+        ? h('ul.cut-list', listed.map((p) => pieceRow(p, sel?.type === 'piece' && sel.key === p.key)))
+        : h('div.empty-how',
+          h('p', h('strong', 'ยังไม่มีชิ้นที่จะทิ้ง')),
+          h('ol',
+            h('li', 'เล่นวิดีโอไปถึงจุดที่จะผ่า แล้วกด “มาร์กจุดตัด” (C)'),
+            h('li', 'ผ่าอีกจุดที่ปลายช่วงที่ไม่ต้องการ'),
+            h('li', 'คลิกชิ้นตรงกลางบน timeline แล้วกด “ทิ้งชิ้นนี้”'))),
+      h('h3', 'แยกเป็นหลายไฟล์'),
+      splitMarks.length
+        ? h('ul.split-list', splitMarks.map((m) => h('li.split-row',
+          h('button.ghost.small.tc', { type: 'button', onclick: () => { player.seek(m.at); select({ type: 'mark', id: m.id }); } }, formatTime(m.at)),
+          h('input', { type: 'text', value: m.label || '', 'aria-label': 'ชื่อไฟล์ช่วงนี้', onchange: (e) => edit((x) => C.setMarkLabel(x, m.id, e.target.value)) }),
+          h('button.ghost.small', { type: 'button', title: 'ยกเลิกแยกไฟล์ (จุดตัดยังอยู่)', onclick: () => edit((x) => C.setSplit(x, m.id, false)) }, 'ยกเลิก'))))
+        : h('p.hint', 'คลิกจุดตัดบน timeline แล้วเลือก “แยกเป็นไฟล์ใหม่ตรงนี้” เพื่อให้ส่งออกเป็นหลายไฟล์ เช่น แยกตามหัวข้อ'));
+    const selEl = sideBody.querySelector('.cut-row.selected');
+    if (selEl) scrollWithin(sideBody, selEl, false);
   }
 
   // ---------- side: transcript + sync anchors ----------
@@ -227,19 +300,26 @@ export function mount(root, app) {
 
   function renderSide() {
     const st = s();
-    segCuts.textContent = `ช่วงตัด (${st.cuts.length})`;
+    const n = C.counts(st.edit, D());
+    segPieces.textContent = `ชิ้นที่ทิ้ง (${n.delete + n.suggested})`;
     segSync.textContent = 'Transcript และหมุดเวลา';
-    segCuts.setAttribute('aria-selected', String(sideView === 'cuts'));
+    segPieces.setAttribute('aria-selected', String(sideView === 'pieces'));
     segSync.setAttribute('aria-selected', String(sideView === 'sync'));
-    if (sideView === 'cuts') renderCuts(); else renderSync();
+    if (sideView === 'pieces') renderPieces(); else renderSync();
   }
 
   function renderTimeline() {
     const st = s();
-    timelineView.render({ timeline: tl, cuts: st.cuts, splits: st.splits, anchorsG: st.anchors.map((a) => a.g), selectedCutId: st.selectedCutId, effectiveEnd: (c) => eff(c).effectiveEnd });
-    const plan = buildPlan(tl, st.cuts, st.splits);
-    const undecided = st.cuts.filter((c) => c.status === 'suggested').length;
-    clear(summary, `ผลลัพธ์ ${formatTime(plan.keptDuration)}${plan.parts.length > 1 ? ` ใน ${plan.parts.length} ไฟล์` : ''}`, undecided ? h('span.hint', ` · ยังไม่ได้ตัดสินใจ ${undecided} ช่วง`) : null);
+    const ps = C.piecesOf(st.edit, D());
+    // faint ticks where a lossless export really resumes after a thrown-away piece
+    const ticks = ps.filter((p) => p.status === 'delete').map((p) => ({ t: resumeAt(p), end: p.end })).filter((x) => x.t < x.end - 0.05).map((x) => x.t);
+    timelineView.render({ timeline: tl, pieces: ps, marks: marks(), selection: st.selection, anchorsG: st.anchors.map((a) => a.g), ticks });
+    const tb = toolbar();
+    timelineView.showToolbar(tb?.el || null, tb?.t || 0);
+    const { cuts, splits } = C.toPlanInput(st.edit, D());
+    const plan = buildPlan(tl, cuts, splits);
+    const n = C.counts(st.edit, D());
+    clear(summary, `ผลลัพธ์ ${formatTime(plan.keptDuration)}${plan.parts.length > 1 ? ` ใน ${plan.parts.length} ไฟล์` : ''}`, n.suggested ? h('span.hint', ` · รอตัดสินใจ ${n.suggested} ชิ้น`) : null);
   }
 
   // ---------- time updates ----------
@@ -264,36 +344,62 @@ export function mount(root, app) {
   // ---------- keyboard ----------
   function onKey(e) {
     if (e.target.closest('input, textarea, select, [contenteditable]') || e.metaKey || e.ctrlKey || e.altKey) return;
-    const st = s();
-    const idx = st.cuts.findIndex((c) => c.id === st.selectedCutId);
-    const cur = st.cuts[idx];
     const k = e.key;
+    const st = s();
+    const sel = st.selection;
     const handled = () => e.preventDefault();
-    if (k === ' ') { handled(); player.toggle(); } else if (k === 'ArrowLeft') { handled(); player.seek(player.time - (e.shiftKey ? 1 : 5)); } else if (k === 'ArrowRight') { handled(); player.seek(player.time + (e.shiftKey ? 1 : 5)); } else if (k === 'i' || k === 'I') { handled(); markInOut('in'); } else if (k === 'o' || k === 'O') { handled(); markInOut('out'); } else if (k === 's' || k === 'S') { handled(); addSplit(); } else if (k === 'j' || k === 'J') { handled(); const c = st.cuts[Math.max(0, idx - 1)]; if (c) select(c.id, true); } else if (k === 'k' || k === 'K') { handled(); const c = st.cuts[Math.min(st.cuts.length - 1, idx + 1)]; if (c) select(c.id, true); } else if (cur && (k === 'p' || k === 'P')) { handled(); preview(cur); } else if (cur && (k === 'a' || k === 'A')) { handled(); app.updateCuts((cs) => setStatus(cs, cur.id, 'accepted')); } else if (cur && (k === 'r' || k === 'R')) { handled(); app.updateCuts((cs) => setStatus(cs, cur.id, 'rejected')); } else if (cur && k === '[') { handled(); app.updateCuts((cs) => setEdge(cs, cur.id, 'start', player.time, tl.duration)); } else if (cur && k === ']') { handled(); app.updateCuts((cs) => setEdge(cs, cur.id, 'end', player.time, tl.duration)); }
+    const nav = (dir) => {
+      const list = C.piecesOf(st.edit, D()).filter((p) => kindOf(p) !== 'keep');
+      if (!list.length) return;
+      const cur = sel?.type === 'piece' ? list.findIndex((p) => p.key === sel.key) : -1;
+      const next = list[cur < 0 ? (dir > 0 ? 0 : list.length - 1) : Math.max(0, Math.min(list.length - 1, cur + dir))];
+      select({ type: 'piece', key: next.key });
+      player.seek(next.start);
+    };
+    if (k === ' ') { handled(); player.toggle(); }
+    else if (k === 'ArrowLeft') { handled(); player.seek(player.time - (e.shiftKey ? 1 : 5)); }
+    else if (k === 'ArrowRight') { handled(); player.seek(player.time + (e.shiftKey ? 1 : 5)); }
+    else if (k === 'c' || k === 'C' || k === 'b' || k === 'B') { handled(); markHere(); }
+    else if (k === 'Escape') { handled(); select(null); }
+    else if (k === 'j' || k === 'J') { handled(); nav(-1); }
+    else if (k === 'k' || k === 'K') { handled(); nav(1); }
+    else if (k === 's' || k === 'S') { handled(); if (sel?.type === 'mark') act('split'); else markHere({ split: true }); }
+    else if (!sel) { /* the rest need a selection */ }
+    else if (k === 'Delete' || k === 'Backspace' || k === 'x' || k === 'X') { handled(); act(sel.type === 'mark' ? 'join' : 'toggle'); }
+    else if (k === 'p' || k === 'P') { handled(); act('preview'); }
+    else if (sel.type === 'piece' && (k === 'a' || k === 'A')) { handled(); act('delete'); }
+    else if (sel.type === 'piece' && (k === 'r' || k === 'R')) { handled(); act('keep'); }
+    else if (sel.type === 'piece' && k === '[') { handled(); act('start-here'); }
+    else if (sel.type === 'piece' && k === ']') { handled(); act('end-here'); }
   }
   document.addEventListener('keydown', onKey);
-  const onResize = () => timelineView.resize();
+  const onResize = () => { timelineView.resize(); renderTimeline(); };
   window.addEventListener('resize', onResize);
 
   // ---------- store wiring ----------
   let last = null;
   const unsub = store.subscribe((st) => {
-    const sig = [st.cuts, st.splits, st.anchors, st.anchorMode, st.selectedCutId, st.transcript, st.videos];
+    const sig = [st.edit, st.anchors, st.anchorMode, st.selection, st.transcript, st.videos];
     if (last && sig.every((v, i) => v === last[i])) return;
-    const linesChanged = !last || last[2] !== sig[2] || last[3] !== sig[3] || last[5] !== sig[5];
+    const linesChanged = !last || last[1] !== sig[1] || last[2] !== sig[2] || last[4] !== sig[4];
     last = sig;
     tl = app.timeline();
+    // drop a selection that no longer exists (e.g. after joining)
+    if (st.selection && ((st.selection.type === 'piece' && !piece(st.selection.key)) || (st.selection.type === 'mark' && !mark(st.selection.id)))) {
+      store.set({ selection: null });
+      return;
+    }
     renderTimeline();
-    if (sideView === 'cuts' || linesChanged) renderSide();
+    if (sideView === 'pieces' || linesChanged) renderSide();
   });
 
   player.load(tl, s().videos.map((v) => v.url));
   renderTimeline();
   renderSide();
-  last = [s().cuts, s().splits, s().anchors, s().anchorMode, s().selectedCutId, s().transcript, s().videos];
-  const first = s().cuts.find((c) => c.id === s().selectedCutId) || s().cuts[0];
-  if (first) player.seek(Math.max(0, first.start - seam));
-  requestAnimationFrame(() => timelineView.resize());
+  last = [s().edit, s().anchors, s().anchorMode, s().selection, s().transcript, s().videos];
+  const firstPiece = C.piecesOf(s().edit, D()).find((p) => kindOf(p) !== 'keep');
+  if (firstPiece) player.seek(Math.max(0, firstPiece.start - seam));
+  requestAnimationFrame(() => { timelineView.resize(); renderTimeline(); });
 
   return () => {
     unsub();

@@ -79,14 +79,14 @@ export function mount(root, app) {
       h('div.next-bar',
         h('button.ghost', { type: 'button', onclick: () => app.go('start') }, icon('arrowLeft', 16), 'เปิดโฟลเดอร์อื่น'),
         h('div.next-right',
-          s.cuts.length ? h('button.secondary', { type: 'button', onclick: () => app.go('review') }, 'กลับไปตรวจจุดตัดเดิม') : null,
+          s.edit.marks.length ? h('button.secondary', { type: 'button', onclick: () => app.go('review') }, 'กลับไปตรวจจุดตัดเดิม') : null,
           h('button.primary', { type: 'button', disabled: !s.videos.every((v) => v.duration), onclick: () => app.analyze() }, 'หาจุดตัด', icon('arrowRight', 16)))));
   }
 
   render();
   let last = null;
   const unsub = app.store.subscribe((s) => {
-    const sig = [s.videos, s.transcript, s.detectorSettings, s.cuts.length];
+    const sig = [s.videos, s.transcript, s.detectorSettings, s.edit.marks.length];
     if (last && sig.every((v, i) => v === last[i])) return;
     last = sig;
     // keep focus inside the settings form while typing

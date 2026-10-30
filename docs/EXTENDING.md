@@ -22,10 +22,13 @@
   description: 'อธิบายสั้น ๆ ว่าได้อะไร เร็วหรือช้า',
   speed: 'fast' | 'slow',          // fast = ไม่ encode ภาพใหม่ (แอปจะเช็คเพดาน 1.9 GB ให้)
   experimental: false,
-  snapToKeyframes: true,           // true เมื่อ copy ภาพ (ต้องเริ่มทุกช่วงที่ keyframe)
+  snapToKeyframes: true,           // true เมื่อ copy ภาพ (ต้องเริ่มทุกชิ้นที่ keyframe); false = ตัดตรงจุด (ต้อง encode ใหม่)
+  needsStreamInfo: false,          // true ถ้าต้องรู้ว่าไฟล์มีเสียงไหม (จะได้ hasAudio)
   outputExtension: 'mp4',
   options: [ { key, label, type: 'select', default, choices: [{ value, label }] } ],
-  buildArgs({ listPath, outPath, options }) { return [ ...ffmpeg args... ]; },
+  // listPath : ffconcat ของชิ้นที่เก็บไว้ (เหมาะกับ -c copy)
+  // segments : [{ fileIndex, inpoint, outpoint|null }] ใช้คู่กับ inputPaths[fileIndex] (เหมาะกับการ encode ใหม่แบบตัดเป๊ะ)
+  buildArgs({ listPath, outPath, options, segments, inputPaths, hasAudio }) { return [ ...ffmpeg args... ]; },
 }
 ```
 

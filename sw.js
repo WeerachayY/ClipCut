@@ -1,7 +1,7 @@
 // Offline support. App code: stale-while-revalidate (updates arrive on the next visit).
 // Vendored libraries (ffmpeg core, fonts): cache-first, they never change for a given path.
 // VERSION must match js/version.js (checked by tests). A new value makes browsers drop the old cache.
-const VERSION = 'clipcut-0.2.0';
+const VERSION = 'clipcut-0.3.0';
 const SHELL = ['./', './index.html', './css/app.css', './js/main.js', './manifest.webmanifest', './icons/favicon.svg', './icons/icon.svg', './icons/icon-192.png'];
 
 self.addEventListener('install', (e) => {

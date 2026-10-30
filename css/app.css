@@ -70,6 +70,10 @@ button.icon-only { padding: 6px; }
 button.danger { color: var(--cut); }
 button.on-cut { background: var(--cut); color: #fff; border-color: var(--cut); }
 button.on-keep { background: var(--keep-bg); color: var(--keep); border-color: var(--keep); }
+button.danger-fill { background: var(--cut); color: #fff; border-color: var(--cut); }
+button.danger-fill:hover { filter: brightness(1.08); }
+kbd { font: 500 11px var(--mono); color: var(--ink-2); border: 1px solid var(--rule); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; margin-left: 4px; }
+.mark-btn { font-weight: 600; }
 .icon { display: inline-flex; flex: none; }
 
 input[type=text], input[type=number], select, textarea { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 6px 8px; min-width: 0; }
@@ -159,7 +163,7 @@ textarea { width: 100%; resize: vertical; font-size: 13px; }
 .review { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 16px; align-items: start; }
 .rv-main { display: grid; gap: 10px; min-width: 0; }
 .player-wrap { position: relative; background: #000; border-radius: 10px; overflow: hidden; }
-.player { display: block; width: 100%; max-height: 54vh; aspect-ratio: 16 / 9; background: #000; }
+.player { display: block; width: 100%; height: clamp(200px, calc(100vh - 480px), 62vh); background: #000; }
 .file-tag { position: absolute; left: 10px; top: 8px; font-size: 12px; color: #fff; background: rgba(0,0,0,.55); padding: 2px 8px; border-radius: 4px; }
 .file-tag:empty { display: none; }
 .transport { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; }
@@ -176,38 +180,47 @@ textarea { width: 100%; resize: vertical; font-size: 13px; }
 .tl-legend { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); flex-wrap: wrap; }
 .sw { width: 14px; height: 10px; border-radius: 2px; display: inline-block; margin-left: 8px; }
 .sw:first-child { margin-left: 0; }
-.sw.accepted { background: repeating-linear-gradient(135deg, var(--cut) 0 3px, var(--cut-2) 3px 6px); }
+.sw.delete { background: repeating-linear-gradient(135deg, var(--cut) 0 3px, var(--cut-2) 3px 6px); }
 .sw.high { border: 1.5px solid var(--cut); background: repeating-linear-gradient(135deg, var(--cut-bg) 0 3px, transparent 3px 6px); }
 .sw.check { border: 1.5px solid var(--check); background: repeating-linear-gradient(135deg, var(--check-bg) 0 3px, transparent 3px 6px); }
-.sw.rejected { border: 1.5px dashed var(--keep); }
-.sw.split { width: 3px; background: var(--accent); }
+.sw.mark { width: 2px; height: 12px; background: var(--ink); border-radius: 0; }
+.sw.split { width: 3px; height: 12px; background: var(--accent); border-radius: 0; }
 .tl-zoom { display: flex; align-items: center; gap: 2px; font-size: 12px; color: var(--ink-2); }
-.tl-zoom-label { min-width: 30px; text-align: center; font-family: var(--mono); }
+.tl-zoom-label { min-width: 34px; text-align: center; font-family: var(--mono); }
 .tl-scroll { overflow-x: auto; overflow-y: hidden; }
-.tl-inner { position: relative; width: 100%; height: 112px; cursor: crosshair; user-select: none; touch-action: pan-x; }
+.tl-inner { position: relative; width: 100%; height: 156px; cursor: crosshair; user-select: none; touch-action: pan-x; }
 .tl-ruler { position: absolute; left: 0; right: 0; top: 0; height: 18px; border-bottom: 1px solid var(--rule); }
 .tl-tick { position: absolute; top: 0; font: 500 11px var(--mono); color: var(--ink-3); padding-left: 3px; border-left: 1px solid var(--rule); height: 18px; white-space: nowrap; }
-.tl-pins { position: absolute; left: 0; right: 0; top: 20px; height: 22px; }
-.tl-pin { position: absolute; top: 0; height: 90px; }
-.tl-pin.split { border-left: 2px solid var(--accent); z-index: 2; }
-.tl-pin.split span { position: absolute; left: 3px; top: 0; font-size: 11px; background: var(--accent); color: var(--on-accent); padding: 0 5px; border-radius: 3px; white-space: nowrap; }
-.tl-pin.anchor { top: 34px; width: 0; height: 0; margin-left: -5px; border: 5px solid transparent; border-bottom: 7px solid var(--keep); }
-.tl-track { position: absolute; left: 0; right: 0; top: 46px; height: 58px; border-radius: 6px; overflow: hidden; background: var(--talk); }
+.tl-track { position: absolute; left: 0; right: 0; top: 44px; height: 60px; border-radius: 6px; overflow: hidden; background: var(--talk); }
 .tl-file { position: absolute; top: 0; bottom: 0; background: var(--talk); }
 .tl-file.alt { background: var(--talk-2); }
 .tl-file-name { position: absolute; left: 6px; bottom: 3px; font-size: 11px; color: var(--ink-2); white-space: nowrap; }
 .tl-seam { position: absolute; top: 0; bottom: 0; border-left: 2px dashed var(--ink-2); }
-.tl-cut { position: absolute; top: 0; bottom: 0; min-width: 4px; cursor: pointer; }
-.tl-cut.accepted { background: repeating-linear-gradient(135deg, var(--cut) 0 7px, var(--cut-2) 7px 14px); }
-.tl-cut.high { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--cut) 35%, transparent) 0 7px, transparent 7px 14px); box-shadow: inset 0 0 0 2px var(--cut); }
-.tl-cut.check { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--check) 35%, transparent) 0 7px, transparent 7px 14px); box-shadow: inset 0 0 0 2px var(--check); }
-.tl-cut.rejected { top: 40px; background: var(--keep-bg); box-shadow: inset 0 0 0 1.5px var(--keep); }
-.tl-cut.selected { outline: 2px solid var(--ink); outline-offset: 0; z-index: 1; }
-.tl-cut-kept { position: absolute; right: 0; top: 0; bottom: 0; background: color-mix(in srgb, var(--talk) 80%, transparent); }
-.tl-playhead { position: absolute; top: 18px; bottom: 6px; width: 0; border-left: 2px solid var(--ink); pointer-events: none; z-index: 3; }
-.tl-playhead-cap { position: absolute; top: -2px; left: -6px; border: 5px solid transparent; border-top: 7px solid var(--ink); }
-.tl-hover { position: absolute; top: 104px; transform: translateX(-50%); font: 500 11px var(--mono); color: var(--ink-2); opacity: 0; pointer-events: none; white-space: nowrap; }
+.tl-piece { position: absolute; top: 0; bottom: 0; }
+.tl-piece.delete { background: repeating-linear-gradient(135deg, var(--cut) 0 7px, var(--cut-2) 7px 14px); }
+.tl-piece.high { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--cut) 35%, transparent) 0 7px, transparent 7px 14px); box-shadow: inset 0 0 0 2px var(--cut); }
+.tl-piece.check { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--check) 35%, transparent) 0 7px, transparent 7px 14px); box-shadow: inset 0 0 0 2px var(--check); }
+.tl-piece.keep { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.tl-piece.selected { box-shadow: inset 0 0 0 3px var(--accent); }
+.tl-kf { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px dotted var(--ink); opacity: .55; }
+.tl-lines { position: absolute; left: 0; right: 0; top: 38px; height: 66px; pointer-events: none; }
+.tl-mark { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px solid var(--ink); margin-left: -1px; }
+.tl-mark.split { border-left: 3px solid var(--accent); margin-left: -1.5px; }
+.tl-mark.selected { border-left-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+.tl-pins { position: absolute; left: 0; right: 0; top: 22px; height: 18px; }
+.tl-mark-h { position: absolute; top: 0; width: 14px; height: 16px; margin-left: -7px; border-radius: 3px 3px 7px 7px; background: var(--ink); cursor: ew-resize; z-index: 2; }
+.tl-mark-h:hover { transform: scale(1.12); }
+.tl-mark-h.split { background: var(--accent); }
+.tl-mark-h.selected { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); }
+.tl-split-label { position: absolute; left: 12px; top: 0; font-size: 11px; line-height: 16px; background: var(--accent); color: var(--on-accent); padding: 0 6px; border-radius: 3px; white-space: nowrap; pointer-events: none; }
+.tl-anchor { position: absolute; top: 9px; width: 0; height: 0; margin-left: -5px; border: 5px solid transparent; border-bottom: 7px solid var(--keep); pointer-events: none; }
+.tl-playhead { position: absolute; top: 18px; height: 86px; width: 0; border-left: 2px solid var(--cut); pointer-events: none; z-index: 3; }
+.tl-playhead-cap { position: absolute; top: -2px; left: -6px; border: 5px solid transparent; border-top: 7px solid var(--cut); }
+.tl-hover { position: absolute; top: 1px; transform: translateX(-50%); font: 500 11px var(--mono); color: var(--ink); background: var(--panel); padding: 0 4px; border-radius: 3px; opacity: 0; pointer-events: none; white-space: nowrap; z-index: 4; }
 .tl-hover.on { opacity: 1; }
+.tl-toolbar-slot { position: absolute; left: 0; right: 0; top: 112px; height: 40px; }
+.tl-toolbar { position: absolute; top: 0; transform: translateX(-50%); display: flex; gap: 4px; align-items: center; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 4px 6px; box-shadow: 0 2px 10px rgba(16, 24, 40, .10); white-space: nowrap; cursor: default; }
+.tb-info { font: 500 12px var(--mono); color: var(--ink-2); padding: 0 6px 0 2px; }
 
 .rv-side { background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; display: flex; flex-direction: column; max-height: calc(100vh - 150px); position: sticky; top: 72px; min-height: 0; }
 .side-body { flex: 1; min-height: 0; }
@@ -237,7 +250,9 @@ textarea { width: 100%; resize: vertical; font-size: 13px; }
 .cut-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .cut-edit { display: grid; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--rule); }
 .cut-edit > button { justify-self: start; }
-.edge { display: flex; align-items: center; gap: 2px; }
+.empty-how { padding: 12px 0; color: var(--ink-2); font-size: 13.5px; }
+.empty-how ol { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 4px; }
+.edge { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
 .edge-label { width: 56px; font-size: 13px; color: var(--ink-2); }
 .split-row, .anchor-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; font-size: 13px; }
 .split-row input { flex: 1; }

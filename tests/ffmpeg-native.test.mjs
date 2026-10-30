@@ -63,15 +63,23 @@ test('silence detector args find the silent stretch', { skip: !hasFfmpeg && 'ffm
   assert.ok(Math.abs(ranges[0].start - 20) < 0.1 && Math.abs(ranges[0].end - 45) < 0.1, JSON.stringify(ranges));
 });
 
-test('compress profile produces a smaller H.264 file', { skip: !hasFfmpeg && 'ffmpeg not installed' }, async () => {
-  const a = makeVideo('c.mp4', 20, '0.3*sin(2*PI*440*t)');
-  const k = await readMp4Keyframes(await openAsBlob(a));
-  const tl = new Timeline([{ id: 'a', name: 'c.mp4', duration: k.duration, keyframes: k.keyframes }]);
-  const plan = buildPlan(tl, [{ id: 'c', start: 5, end: 9, status: 'accepted' }]);
-  const listPath = join(dir, 'c.txt');
-  writeFileSync(listPath, buildConcatList(plan.parts[0], () => a));
+test('compress profile cuts exactly, even inside a GOP, across two files', { skip: !hasFfmpeg && 'ffmpeg not installed' }, async () => {
+  const a = makeVideo('c1.mp4', 20, '0.3*sin(2*PI*440*t)');
+  const b = makeVideo('c2.mp4', 10, '0.3*sin(2*PI*330*t)');
+  const files = [];
+  for (const [i, p] of [a, b].entries()) {
+    const k = await readMp4Keyframes(await openAsBlob(p));
+    files.push({ id: String(i), name: p.split('/').pop(), duration: k.duration, keyframes: k.keyframes, path: p });
+  }
+  const tl = new Timeline(files);
+  // 0.7 s cut in the middle of a 2 s GOP: impossible without re-encoding
+  const plan = buildPlan(tl, [{ id: 'c', start: 5.3, end: 6.0, status: 'accepted' }, { id: 'd', start: 18, end: 23, status: 'accepted' }], [], { snap: false });
+  const profile = getExportProfile('compress-h264');
+  assert.equal(profile.snapToKeyframes, false);
   const outPath = join(dir, 'c-out.mp4');
-  const args = getExportProfile('compress-h264').buildArgs({ listPath, outPath, options: { height: '720', fps: '15' } });
+  const args = profile.buildArgs({ outPath, options: { height: '720', fps: '15' }, segments: plan.parts[0].segments, inputPaths: files.map((f) => f.path), hasAudio: true });
   execFileSync('ffmpeg', ['-v', 'error', ...args]);
-  assert.ok(Math.abs(duration(outPath) - plan.parts[0].duration) < 0.2);
+  const expected = 30 - 0.7 - 5;
+  assert.ok(Math.abs(plan.parts[0].duration - expected) < 1e-6);
+  assert.ok(Math.abs(duration(outPath) - expected) < 0.15, `got ${duration(outPath)}, expected ${expected}`);
 });

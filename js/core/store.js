@@ -2,12 +2,11 @@
 // Video File objects and folder handles live only in memory; the project file stores
 // names, sizes and every decision so work can be resumed later.
 import { defaultDetectorSettings } from './registry.js';
+import { emptyEdit, fromLegacy } from './cuts.js';
+export { newId } from './id.js';
 
 export const PROJECT_FILE = 'clipcut.project.json';
-export const PROJECT_VERSION = 1;
-
-let uid = 0;
-export const newId = (prefix = 'id') => `${prefix}${Date.now().toString(36)}${(uid++).toString(36)}`;
+export const PROJECT_VERSION = 2;
 
 export function initialState() {
   return {
@@ -21,13 +20,12 @@ export function initialState() {
     anchorMode: 'linear',
     analysis: {},            // {detectorId: [{start,end}] global}
     analysisKey: null,       // which videos the analysis belongs to
-    cuts: [],                // [{id,start,end,status,confidence,reasons,origin,edited}]
-    splits: [],              // [{id,at,label}]
+    edit: emptyEdit(),       // cut points and piece states, see core/cuts.js
     detectorSettings: defaultDetectorSettings(),
     exportProfile: 'copy',
     exportOptions: {},
     outputBase: '',
-    selectedCutId: null,
+    selection: null,         // {type:'piece', key} | {type:'mark', id}
     savedAt: null,
   };
 }
@@ -61,8 +59,7 @@ export function serializeProject(s) {
     anchorMode: s.anchorMode,
     analysis: s.analysis,
     analysisKey: s.analysisKey,
-    cuts: s.cuts,
-    splits: s.splits,
+    edit: s.edit,
     detectorSettings: s.detectorSettings,
     exportProfile: s.exportProfile,
     exportOptions: s.exportOptions,
@@ -84,14 +81,15 @@ export function restoreProject(saved, videos) {
     ordered.push(v);
   }
   const rest = videos.filter((v) => !ordered.includes(v));
+  const duration = ordered.reduce((a, v) => a + (v.duration || 0), 0) || Infinity;
+  const edit = saved.edit || fromLegacy(saved.cuts || [], saved.splits || [], duration);
   return {
     videos: [...ordered, ...rest],
     anchors: saved.anchors || [],
     anchorMode: saved.anchorMode || 'linear',
     analysis: saved.analysis || {},
     analysisKey: saved.analysisKey || null,
-    cuts: saved.cuts || [],
-    splits: saved.splits || [],
+    edit,
     detectorSettings: { ...defaultDetectorSettings(), ...(saved.detectorSettings || {}) },
     exportProfile: saved.exportProfile || 'copy',
     exportOptions: saved.exportOptions || {},
