@@ -94,7 +94,7 @@ test('plan without keyframes keeps exact times', () => {
   assert.equal(plan.parts[0].segments[1].inpoint, 20.25);
 });
 
-test('SA+RA docx transcript parses and dedupes', async () => {
+test('Word transcript ([time] speaker: text) parses and dedupes', async () => {
   const blob = await openAsBlob(fixture('sara-sample.docx'));
   const parser = findTranscriptParser('sara-sample.docx');
   assert.equal(parser.id, 'sara-docx');
@@ -166,7 +166,7 @@ test('proposed anchors line up speech after silence', () => {
   assert.equal(prop[0].g, 404.5);
 });
 
-test('folder classification picks videos in order and the SA+RA transcript', async () => {
+test('folder classification picks videos in order and the transcript', async () => {
   const { classifyFiles } = await import('../js/io/folder.js');
   const f = (name, t = 0) => new File(['x'], name, { lastModified: t });
   const c = classifyFiles([f('Recording 10.mp4'), f('Recording 2.mp4'), f('notes.txt', 5), f('Meeting transcript.docx', 1), f('~$temp.docx'), f('clipcut.project.json'), f('cover.png')]);

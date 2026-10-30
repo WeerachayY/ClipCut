@@ -1,8 +1,8 @@
 {
   "name": "clipcut",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "PWA สำหรับตัดช่วงพักออกจากวิดีโอประชุม ประมวลผลในเครื่องด้วย ffmpeg.wasm",
+  "description": "PWA สำหรับตัด ต่อ และแบ่งวิดีโอ หาช่วงเงียบและช่วงที่ไม่มีคนพูดให้อัตโนมัติ ประมวลผลในเครื่องด้วย ffmpeg.wasm",
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.mjs",

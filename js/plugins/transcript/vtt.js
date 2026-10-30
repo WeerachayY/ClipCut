@@ -1,4 +1,4 @@
-// WebVTT (Teams "Download as .vtt") and SubRip (.srt).
+// WebVTT (.vtt, e.g. from Teams / Zoom / YouTube) and SubRip (.srt).
 import { parseTimecode } from '../../core/time.js';
 
 const CUE_RE = /(\d{1,3}:)?\d{1,2}:\d{2}[.,]\d{1,3}\s*-->\s*(\d{1,3}:)?\d{1,2}:\d{2}[.,]\d{1,3}/;
@@ -26,7 +26,7 @@ export function parseCues(text) {
 
 export default {
   id: 'vtt',
-  label: 'คำบรรยาย .vtt / .srt (Teams)',
+  label: 'คำบรรยาย .vtt / .srt',
   extensions: ['.vtt', '.srt'],
   async parse(file) {
     const lines = parseCues(await file.text());

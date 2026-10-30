@@ -64,7 +64,7 @@ export function mount(root, app) {
             h('div.tname', icon('file', 16), t.fileName),
             h('div.tmeta', `${t.parserLabel} · ${t.lines.length} บรรทัด · ${formatTime(t.lines[0]?.tau)} ถึง ${formatTime(lastTau)}`),
             t.removed ? h('div.tmeta', `ตัดบรรทัดซ้ำออก ${t.removed} บรรทัด`) : null,
-            mismatch ? h('p.warn', icon('alert', 16), `transcript ยาวกว่าวิดีโอ ${formatDuration(lastTau - tl.duration)} อาจเป็นคนละประชุม หรือเวลาเริ่มไม่ตรงกัน ปรับได้ด้วยหมุดเวลาในขั้นถัดไป`) : null)
+            mismatch ? h('p.warn', icon('alert', 16), `transcript ยาวกว่าวิดีโอ ${formatDuration(lastTau - tl.duration)} อาจเป็นคนละเรื่องกัน หรือเวลาเริ่มไม่ตรงกัน ปรับได้ด้วยหมุดเวลาในขั้นถัดไป`) : null)
             : h('p.empty', 'ไม่มี transcript จะหาจุดตัดจากเสียงเงียบอย่างเดียว'),
           h('div.row-actions',
             candidates.map((f) => h('button.secondary.small', { type: 'button', onclick: () => app.setTranscript(f) }, `ใช้ ${f.name}`)),

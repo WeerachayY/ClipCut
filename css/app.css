@@ -93,7 +93,7 @@ textarea { width: 100%; resize: vertical; font-size: 13px; }
 .brand { display: flex; align-items: center; gap: 10px; }
 .brand-mark { width: 26px; height: 26px; display: block; }
 .brand-name { font-weight: 600; font-size: 17px; }
-.brand-sub { color: var(--ink-2); font-size: 13px; }
+.brand-ver { color: var(--ink-3); font: 500 12px var(--mono); padding: 1px 6px; border: 1px solid var(--rule); border-radius: 4px; }
 .steps { display: flex; gap: 4px; list-style: none; margin: 0; padding: 0; }
 .steps button { color: var(--ink-2); padding: 6px 10px; }
 .steps button:disabled { opacity: 1; }
@@ -299,7 +299,6 @@ a.button:hover { border-color: var(--ink-3); }
   .review { grid-template-columns: 1fr; }
   .rv-side { position: static; max-height: none; }
   .files-grid, .export-grid { grid-template-columns: 1fr; }
-  .brand-sub { display: none; }
 }
 @media (max-width: 720px) {
   .top { flex-wrap: wrap; padding: 10px 16px; gap: 8px 16px; }

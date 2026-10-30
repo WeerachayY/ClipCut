@@ -16,7 +16,7 @@ export default {
     },
     {
       key: 'fps', label: 'เฟรมต่อวินาที', type: 'select', default: '15',
-      choices: [{ value: 'keep', label: 'เท่าต้นฉบับ' }, { value: '30', label: '30' }, { value: '15', label: '15 (พอสำหรับประชุม เร็วขึ้นเกือบเท่าตัว)' }],
+      choices: [{ value: 'keep', label: 'เท่าต้นฉบับ' }, { value: '30', label: '30' }, { value: '15', label: '15 (พอสำหรับสไลด์และคนพูด เร็วขึ้นเกือบเท่าตัว)' }],
     },
     {
       key: 'crf', label: 'คุณภาพ', type: 'select', default: '26',

@@ -1,4 +1,4 @@
-// Word transcript from SA+RA ("Download Transcript"): one paragraph per utterance,
+// Word transcript (e.g. exported by a note-taking bot): one paragraph per utterance,
 // formatted "[hh:mm:ss] Speaker: text".
 import { readZipText } from '../../io/unzip.js';
 import { parseBracketLines } from './common.js';
@@ -26,7 +26,7 @@ export function docxParagraphs(xml) {
 
 export default {
   id: 'sara-docx',
-  label: 'Word (.docx) จาก SA+RA',
+  label: 'Word (.docx) แบบ [เวลา] ชื่อ: ข้อความ',
   extensions: ['.docx'],
   async parse(file) {
     const xml = await readZipText(file, 'word/document.xml');

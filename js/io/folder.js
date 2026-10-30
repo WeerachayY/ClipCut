@@ -1,4 +1,4 @@
-// Local files: open a meeting folder (File System Access API, Edge/Chrome) or take dropped files.
+// Local files: open a project folder (File System Access API, Edge/Chrome) or take dropped files.
 // Nothing here talks to the network.
 import { PROJECT_FILE } from '../core/store.js';
 

@@ -7,7 +7,7 @@ export const MAX_OUTPUT_BYTES = 1.9 * 1024 ** 3; // browser memory ceiling for o
 export const safeName = (s) => String(s).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 80);
 
 export function partFileName(base, part, count, ext = 'mp4') {
-  const b = safeName(base) || 'meeting';
+  const b = safeName(base) || 'video';
   if (count <= 1) return `${b}.${ext}`;
   const n = String(part.index + 1).padStart(2, '0');
   const label = safeName(part.label || '');

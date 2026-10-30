@@ -1,6 +1,6 @@
 import { parseTimecode } from '../../core/time.js';
 
-// "[00:01:34] Speaker Name: text"  (SA+RA, many note-taking bots)
+// "[00:01:34] Speaker Name: text"  (common export format of note-taking / transcription bots)
 const LINE_RE = /^\s*\[(\d{1,3}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?)\]\s*([^:：]{1,80}?)\s*[:：]\s*(.*)$/;
 
 /** Parse paragraphs/lines of "[time] speaker: text". Lines without a timestamp continue the previous entry. */

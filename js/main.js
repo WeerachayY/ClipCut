@@ -1,4 +1,5 @@
 import './plugins/index.js';
+import { APP_VERSION } from './version.js';
 import { createStore, newId, serializeProject, restoreProject, videosKey, PROJECT_FILE } from './core/store.js';
 import { Timeline } from './core/timeline.js';
 import { findTranscriptParser, detectors } from './core/registry.js';
@@ -223,7 +224,7 @@ const root = document.getElementById('app');
 const stepNav = h('ol.steps');
 const saveState = h('span.save-state');
 const header = h('header.top',
-  h('div.brand', h('img.brand-mark', { src: './icons/favicon.svg', alt: '', width: 26, height: 26 }), h('span.brand-name', 'ClipCut'), h('span.brand-sub', 'ตัดช่วงพักจากวิดีโอประชุม')),
+  h('div.brand', h('img.brand-mark', { src: './icons/favicon.svg', alt: '', width: 26, height: 26 }), h('span.brand-name', 'ClipCut'), h('span.brand-ver', `v${APP_VERSION}`)),
   h('nav', { 'aria-label': 'ขั้นตอน' }, stepNav),
   h('div.top-right', saveState));
 const main = h('main.screen');
@@ -270,4 +271,4 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
 }
 
 // for debugging in the console
-window.clipcut = { app, store, formatTime };
+window.clipcut = { app, store, formatTime, version: APP_VERSION };

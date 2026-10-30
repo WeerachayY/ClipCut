@@ -1,4 +1,4 @@
-// Maps transcript time (tau, as written by SA+RA / Teams) to timeline time (g, the joined video).
+// Maps transcript time (tau, as written in the transcript file) to timeline time (g, the joined video).
 //
 // Anchors ("หมุดเวลา") are pairs {tau, g} the user confirmed by ear.
 //  - no anchors      : g = tau

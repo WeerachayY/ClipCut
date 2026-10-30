@@ -7,7 +7,7 @@ export const estimateEnd = (line, rate) => line.g + clamp(line.text.replace(/\s+
 export default {
   id: 'transcript-gap',
   label: 'ช่องว่างใน transcript',
-  description: 'ช่วงที่ไม่มีใครพูดนานเกินกำหนด รวมช่วงก่อนเริ่มและหลังจบประชุม',
+  description: 'ช่วงที่ไม่มีใครพูดนานเกินกำหนด รวมช่วงก่อนเริ่มพูดและหลังประโยคสุดท้าย',
   needs: 'transcript',
   defaults: { minGap: 180, leadMin: 60, tailMin: 60, charsPerSec: 12, padBefore: 1.5, padAfter: 1 },
   settings: [

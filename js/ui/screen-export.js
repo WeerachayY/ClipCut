@@ -7,7 +7,7 @@ import { ffmpeg } from '../media/ffmpeg.js';
 import { ensureWritable, outputDir, writeFileTo } from '../io/folder.js';
 
 function defaultBase(videos) {
-  const n = videos[0]?.name || 'meeting';
+  const n = videos[0]?.name || 'video';
   return `${n.replace(/\.[^.]+$/, '')}_ตัดแล้ว`;
 }
 
@@ -79,7 +79,7 @@ export function mount(root, app) {
       });
       const names = res.map((r) => r.name);
       const report = cutReport(plan, tl, names);
-      const reportName = `${safeName(base) || 'meeting'}_สรุปการตัด.txt`;
+      const reportName = `${safeName(base) || 'video'}_สรุปการตัด.txt`;
       const reportBytes = new TextEncoder().encode(report);
       await writeOutput(reportName, reportBytes);
       results = { files: [...res, { name: reportName, bytes: reportBytes.byteLength, duration: null }], where };
