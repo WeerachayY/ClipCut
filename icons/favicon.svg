@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>ClipCut</title>
+  <defs>
+    <radialGradient id="bg" cx="0.92" cy="0.06" r="1.05">
+      <stop offset="0" stop-color="#4B2BA6"/>
+      <stop offset="0.5" stop-color="#151A55"/>
+      <stop offset="1" stop-color="#090D2C"/>
+    </radialGradient>
+    <linearGradient id="top" gradientUnits="userSpaceOnUse" x1="20" y1="13" x2="47" y2="29"><stop offset="0" stop-color="#22D3EE"/><stop offset="1" stop-color="#FF8A2A"/></linearGradient>
+    <linearGradient id="bottom" gradientUnits="userSpaceOnUse" x1="47" y1="29" x2="20" y2="45"><stop offset="0" stop-color="#FF8A2A"/><stop offset="1" stop-color="#F21FB4"/></linearGradient>
+    <linearGradient id="left" gradientUnits="userSpaceOnUse" x1="20" y1="45" x2="20" y2="13"><stop offset="0" stop-color="#F21FB4"/><stop offset="1" stop-color="#22D3EE"/></linearGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FF2D55"/><stop offset="0.42" stop-color="#FFE14D"/><stop offset="0.8" stop-color="#22D3EE"/><stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+  <g fill="none" stroke-width="5" stroke-linecap="round">
+    <line x1="20" y1="13" x2="47" y2="29" stroke="url(#top)"/>
+    <line x1="47" y1="29" x2="20" y2="45" stroke="url(#bottom)"/>
+    <line x1="20" y1="45" x2="20" y2="13" stroke="url(#left)"/>
+  </g>
+  <polygon points="20,13 47,29 20,45" fill="#F8F8FB"/>
+  <rect x="11" y="51" width="42" height="5" rx="2.5" fill="url(#bar)"/>
+</svg>

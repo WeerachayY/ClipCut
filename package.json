@@ -1,0 +1,11 @@
+{
+  "name": "clipcut",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PWA สำหรับตัดช่วงพักออกจากวิดีโอประชุม ประมวลผลในเครื่องด้วย ffmpeg.wasm",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "serve": "python3 -m http.server 8080"
+  }
+}
