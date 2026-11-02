@@ -1,8 +1,17 @@
-// The editing strip. Cut points (marks) slice the track into pieces; thrown-away pieces carry the
-// hatched "splice tape". Marks have a handle above the track that can be clicked or dragged.
-// A small command bar floats under whatever is selected.
+// The editing strip. Cut points (marks) slice the timeline into pieces; thrown-away pieces carry the
+// hatched "splice tape" across every lane. Marks have a handle above the lanes that can be clicked or dragged.
+// Lanes (filmstrip, waveform, …) are track plugins (core/registry.js) drawn on a canvas that covers only
+// the visible stretch, so any zoom level costs the same. A small command bar floats under the selection.
 import { h, clear } from './dom.js';
 import { formatTime, formatTimecode } from '../core/time.js';
+import { tracks } from '../core/registry.js';
+
+const LANES_TOP = 44;
+const LANE_GAP = 3;
+const PREFS = 'clipcut.tracks.hidden';
+const loadHidden = () => { try { return new Set(JSON.parse(localStorage.getItem(PREFS) || '[]')); } catch { return new Set(); } };
+const hasPrefs = () => { try { return localStorage.getItem(PREFS) != null; } catch { return false; } };
+const saveHidden = (set) => { try { localStorage.setItem(PREFS, JSON.stringify([...set])); } catch { /* private mode */ } };
 
 const ZOOMS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048];
 const TICKS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600, 900, 1800, 3600];
@@ -19,6 +28,12 @@ export class TimelineView {
     this.data = null;
     this.lastT = 0;
 
+    this.media = { frames: null, layers: {}, progress: {}, analysis: {} };
+    this.hidden = loadHidden();
+    if (!hasPrefs()) for (const t of tracks()) if (t.enabledByDefault === false) this.hidden.add(t.id);
+    this.lanes = h('div.tl-lanes');
+    this.laneList = [];
+    this.trackToggles = h('span.tl-tracks');
     this.ruler = h('div.tl-ruler');
     this.pins = h('div.tl-pins');
     this.track = h('div.tl-track');
@@ -26,13 +41,14 @@ export class TimelineView {
     this.playhead = h('div.tl-playhead', h('span.tl-playhead-cap'));
     this.hover = h('div.tl-hover');
     this.toolbarSlot = h('div.tl-toolbar-slot');
-    this.inner = h('div.tl-inner', this.ruler, this.track, this.lines, this.pins, this.playhead, this.hover, this.toolbarSlot);
+    this.inner = h('div.tl-inner', this.ruler, this.lanes, this.track, this.lines, this.pins, this.playhead, this.hover, this.toolbarSlot);
     this.scroll = h('div.tl-scroll', this.inner);
     this.zoomLabel = h('span.tl-zoom-label', '1×');
     this.el = h('div.tl',
       h('div.tl-bar',
         h('span.tl-legend',
           h('span.sw.delete'), 'ทิ้ง', h('span.sw.high'), 'แนะนำให้ทิ้ง', h('span.sw.check'), 'ควรเช็ค', h('span.sw.mark'), 'จุดตัด', h('span.sw.split'), 'แยกไฟล์'),
+        this.trackToggles,
         h('span.tl-zoom',
           h('button.ghost.small', { type: 'button', onclick: () => this.zoomOut(), 'aria-label': 'ซูมออก', 'data-tip': 'ซูมออก · Ctrl −' }, '−'),
           this.zoomLabel,
@@ -61,9 +77,99 @@ export class TimelineView {
     let raf = 0;
     this.scroll.addEventListener('scroll', () => {
       cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => { this.#renderRuler(); this.#placeToolbar(); });
+      raf = requestAnimationFrame(() => { this.#renderRuler(); this.#placeToolbar(); this.#drawLanes(); });
     });
+    this.#buildLanes();
   }
+
+  /** Frames for the filmstrip, media layers (e.g. waveform), their build progress (0..1 per layer id), detector results. */
+  setMedia({ frames, layers, progress, analysis } = {}) {
+    if (frames !== undefined && frames !== this.media.frames) {
+      this.unFrames?.();
+      this.media.frames = frames;
+      this.unFrames = frames?.onFrame(() => this.redrawSoon());
+    }
+    if (layers !== undefined) this.media.layers = layers || {};
+    if (progress !== undefined) this.media.progress = progress || {};
+    if (analysis !== undefined) this.media.analysis = analysis || {};
+    this.redrawSoon();
+  }
+
+  #renderToggles() {
+    clear(this.trackToggles, tracks().map((t) => {
+      const on = !this.hidden.has(t.id);
+      return h(`button.tl-track-toggle${on ? '.on' : ''}`, {
+        type: 'button', 'aria-pressed': String(on), 'data-tip': on ? `ซ่อนแทร็ก${t.label}` : `แสดงแทร็ก${t.label}`,
+        onclick: () => { if (on) this.hidden.add(t.id); else this.hidden.delete(t.id); saveHidden(this.hidden); this.#buildLanes(); },
+      }, t.label);
+    }));
+  }
+
+  /** One lane per visible track; everything else (pieces, marks, playhead, command bar) stretches to fit. */
+  #buildLanes() {
+    this.#renderToggles();
+    let y = 0;
+    this.laneList = tracks().filter((t) => !this.hidden.has(t.id)).map((t) => {
+      const canvas = h('canvas.tl-canvas');
+      const el = h('div.tl-lane', { dataset: { track: t.id }, style: { top: `${y}px`, height: `${t.height}px` } }, canvas);
+      const lane = { t, el, canvas };
+      y += t.height + LANE_GAP;
+      return lane;
+    });
+    const H = Math.max(28, y - LANE_GAP);
+    clear(this.lanes, this.laneList.map((l) => l.el));
+    this.lanes.style.height = `${H}px`;
+    this.track.style.height = `${H}px`;
+    this.lines.style.height = `${H + 12}px`;
+    this.playhead.style.height = `${LANES_TOP - 18 + H}px`;
+    this.toolbarSlot.style.top = `${LANES_TOP + H + 8}px`;
+    this.inner.style.height = `${LANES_TOP + H + 52}px`;
+    this.#drawLanes();
+  }
+
+  redrawSoon() {
+    if (this.rafDraw) return;
+    this.rafDraw = requestAnimationFrame(() => { this.rafDraw = 0; this.#drawLanes(); });
+  }
+
+  #colors() {
+    const cs = getComputedStyle(this.el);
+    const v = (n) => cs.getPropertyValue(n).trim();
+    return { lane: v('--talk'), laneAlt: v('--talk-2'), gap: v('--panel'), wave: v('--wave') || v('--ink-2'), waveBg: v('--wave-bg') || v('--talk'), muted: v('--ink-3'), font: v('--font') };
+  }
+
+  #drawLanes() {
+    if (!this.data || !this.laneList.length) return;
+    const vw = this.scroll.clientWidth;
+    const W = this.inner.clientWidth;
+    if (!vw || !W) return;
+    const pxPerSec = W / this.duration;
+    const left = this.scroll.scrollLeft;
+    const t0 = left / pxPerSec;
+    const t1 = Math.min(this.duration, (left + vw) / pxPerSec);
+    const dpr = window.devicePixelRatio || 1;
+    const colors = this.#colors();
+    for (const { t, canvas } of this.laneList) {
+      const cw = Math.max(1, Math.round(vw * dpr));
+      const ch = Math.round(t.height * dpr);
+      if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
+      Object.assign(canvas.style, { width: `${vw}px`, height: `${t.height}px`, left: `${left}px` });
+      const g = canvas.getContext('2d');
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      g.clearRect(0, 0, vw, t.height);
+      try {
+        t.draw({
+          g, width: vw, height: t.height, t0, t1, pxPerSec, duration: this.duration, x: (s) => (s - t0) * pxPerSec,
+          timeline: this.data.timeline, frames: this.media.frames, analysis: this.media.analysis, colors,
+          layer: t.layer ? this.media.layers?.[t.layer] || null : null,
+          progress: t.layer ? this.media.progress?.[t.layer] ?? null : null,
+          redraw: () => this.redrawSoon(),
+        });
+      } catch (e) { console.warn(`track ${t.id}`, e); }
+    }
+  }
+
+  dispose() { this.unFrames?.(); cancelAnimationFrame(this.rafDraw); }
 
   get fps() { return this.data?.timeline.fps || 30; }
   zoomIn() { this.setZoom(this.zoomIndex + 1, { t: this.lastT }); }
@@ -81,6 +187,9 @@ export class TimelineView {
   #showHover(t) {
     this.hover.textContent = formatTimecode(t, this.fps, { short: this.duration < 3600 });
     this.hover.style.left = this.#pct(t);
+    // keep the label inside the strip at both ends, or it widens the scroll area
+    const r = t / this.duration;
+    this.hover.style.transform = r > 0.97 ? 'translateX(-100%)' : r < 0.03 ? 'none' : '';
     this.hover.classList.add('on');
   }
 
@@ -143,6 +252,7 @@ export class TimelineView {
     this.scroll.scrollLeft = (t / this.duration) * w - viewX;
     if (this.data) this.#renderRuler();
     this.#placeToolbar();
+    this.#drawLanes();
   }
 
   /**
@@ -153,8 +263,8 @@ export class TimelineView {
     this.data = d;
     this.duration = Math.max(1, d.timeline.duration);
     const sel = d.selection || {};
-    const files = d.timeline.files.map((f, i) => h(`div.tl-file${i % 2 ? '.alt' : ''}`, { style: { left: this.#pct(f.start), width: this.#pct(f.duration) } },
-      h('span.tl-file-name', d.timeline.files.length > 1 ? `ไฟล์ ${i + 1}` : '')));
+    const files = d.timeline.files.length > 1 ? d.timeline.files.map((f, i) => h('div.tl-file', { style: { left: this.#pct(f.start), width: this.#pct(f.duration) } },
+      h('span.tl-file-name', `ไฟล์ ${i + 1}`))) : [];
     const seams = d.timeline.seams.map((s) => h('div.tl-seam', { style: { left: this.#pct(s) }, title: 'รอยต่อระหว่างไฟล์' }));
     const pieces = d.pieces.map((p) => {
       const cls = p.status === 'delete' ? 'delete' : p.status === 'suggested' ? (p.confidence === 'high' ? 'high' : 'check') : 'keep';
@@ -175,6 +285,7 @@ export class TimelineView {
     const anchors = d.anchorsG.map((g) => h('div.tl-anchor', { style: { left: this.#pct(g) }, title: `หมุดเวลา ${formatTime(g)}` }));
     clear(this.pins, handles, anchors);
     this.#renderRuler();
+    this.#drawLanes();
   }
 
   #renderRuler() {
@@ -233,5 +344,5 @@ export class TimelineView {
     if (center || x < scrollLeft + 20 || x > scrollLeft + clientWidth - 20) this.scroll.scrollLeft = x - clientWidth * (center ? 0.5 : 0.2);
   }
 
-  resize() { if (this.data) this.#renderRuler(); }
+  resize() { if (this.data) { this.#renderRuler(); this.#drawLanes(); } }
 }

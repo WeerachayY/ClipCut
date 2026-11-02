@@ -22,10 +22,13 @@ export function initialState() {
     anchorMode: 'linear',
     analysis: {},            // {detectorId: [{start,end}] global}
     analysisKey: null,       // which videos the analysis belongs to
+    layers: {},              // media layers (e.g. waveform): {layerId: {key, version, ...data}}, kept with the job
+    layerProgress: {},       // {layerId: 0..1} while a layer is being built
     edit: emptyEdit(),       // cut points and piece states, see core/cuts.js
     detectorSettings: defaultDetectorSettings(),
     exportProfile: 'copy',
     exportOptions: {},
+    exportExtras: {},        // {extraId: {on, ...options}} for side files such as captions
     outputBase: '',
     selection: null,         // {type:'piece', key} | {type:'mark', id}
     savedAt: null,
@@ -67,6 +70,7 @@ export function serializeProject(s) {
     detectorSettings: s.detectorSettings,
     exportProfile: s.exportProfile,
     exportOptions: s.exportOptions,
+    exportExtras: s.exportExtras,
     outputBase: s.outputBase,
   };
 }
@@ -97,6 +101,7 @@ export function restoreProject(saved, videos) {
     detectorSettings: { ...defaultDetectorSettings(), ...(saved.detectorSettings || {}) },
     exportProfile: saved.exportProfile || 'copy',
     exportOptions: saved.exportOptions || {},
+    exportExtras: saved.exportExtras || {},
     outputBase: saved.outputBase || '',
   };
 }

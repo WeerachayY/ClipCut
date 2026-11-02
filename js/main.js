@@ -2,7 +2,7 @@ import './plugins/index.js';
 import { APP_VERSION } from './version.js';
 import { createStore, newId, serializeProject, restoreProject, videosKey, PROJECT_FILE } from './core/store.js';
 import { Timeline } from './core/timeline.js';
-import { findTranscriptParser, detectors } from './core/registry.js';
+import { findTranscriptParser, detectors, mediaLayers } from './core/registry.js';
 import { suggestCuts } from './core/analysis.js';
 import { applySuggestions, toPlanInput } from './core/cuts.js';
 import { dedupeLines } from './plugins/transcript/common.js';
@@ -217,6 +217,7 @@ const app = {
 
       // the transcript saved with the job first, otherwise the best candidate among the files
       if (rec.transcript) store.set({ transcript: rec.transcript });
+      if (rec.layers) store.set({ layers: rec.layers });
       else for (const t of c.transcripts) { if (await app.setTranscript(t, { quiet: true })) break; }
 
       let step = 'files';
@@ -256,6 +257,7 @@ const app = {
 
   /** Save and close the open job, back to the job list. */
   async goHome() {
+    if (layerRun) ffmpeg.cancel(); // a background waveform pass for this job: not needed any more
     if (store.get().step === 'home') return;
     if (app.exporting) {
       const ok = await ask({ title: 'กำลังส่งออกอยู่', body: 'ถ้ากลับไปหน้ารายการงาน การส่งออกจะถูกยกเลิก', buttons: [{ label: 'ส่งออกต่อ', value: false }, { label: 'ยกเลิกการส่งออก', value: true, kind: 'danger-fill' }] });
@@ -332,8 +334,51 @@ const app = {
     store.set({ videos });
   },
 
+  /** Media layers that belong to the current videos (others are stale: files changed or plugin updated). */
+  validLayers() {
+    const s = store.get();
+    const key = videosKey(s.videos);
+    const out = {};
+    for (const l of mediaLayers()) {
+      const d = s.layers?.[l.id];
+      if (d && d.key === key && d.version === l.version) out[l.id] = d;
+    }
+    return out;
+  },
+
+  /** Build missing media layers in the background (e.g. a job opened from before waveforms existed). */
+  ensureLayers() {
+    if (layerRun) return layerRun;
+    const s = store.get();
+    const have = app.validLayers();
+    const ids = mediaLayers().map((l) => l.id).filter((id) => !have[id]);
+    if (!ids.length || !s.videos.length || !s.videos.every((v) => v.duration)) return Promise.resolve();
+    const key = videosKey(s.videos);
+    const jobId = s.jobId;
+    let shown = -1;
+    layerRun = (async () => {
+      try {
+        const { layers } = await runMediaAnalysis({
+          videos: s.videos, timeline: app.timeline(), settings: s.detectorSettings, only: [], layers: ids,
+          onProgress: ({ ratio }) => {
+            if (ratio == null || Math.abs(ratio - shown) < 0.02) return;
+            shown = ratio;
+            if (store.get().jobId === jobId) store.set({ layerProgress: Object.fromEntries(ids.map((id) => [id, ratio])) });
+          },
+        });
+        const now = store.get();
+        if (now.jobId === jobId && videosKey(now.videos) === key) store.set({ layers: { ...now.layers, ...stampLayers(layers, key) }, layerProgress: {} });
+      } catch (e) {
+        console.warn('media layers', e);
+        if (store.get().jobId === jobId) store.set({ layerProgress: {} });
+      } finally { layerRun = null; }
+    })();
+    return layerRun;
+  },
+
   /** Media analysis (if needed) + detectors, then go to review. */
   async analyze({ force = false } = {}) {
+    if (layerRun) await layerRun;
     const s = store.get();
     const key = videosKey(s.videos);
     let analysis = s.analysisKey === key ? { ...s.analysis } : {};
@@ -347,7 +392,9 @@ const app = {
     const missing = detectors()
       .filter((d) => isMediaDetector(d) && s.detectorSettings[d.id]?.enabled !== false && (force || !analysis[d.id] || used[d.id] !== paramsOf(d)))
       .map((d) => d.id);
-    const needsMedia = missing.length > 0;
+    const have = app.validLayers();
+    const missingLayers = mediaLayers().map((l) => l.id).filter((id) => force || !have[id]);
+    const needsMedia = missing.length > 0 || missingLayers.length > 0;
     const noKeyframes = s.videos.filter((v) => !v.keyframes && !v.kfTried);
     if (needsMedia || !s.compat || noKeyframes.length) {
       const b = busy('เตรียมวิเคราะห์เสียง…');
@@ -364,11 +411,12 @@ const app = {
           store.set({ videos });
         }
         if (needsMedia) {
-          const fresh = await runMediaAnalysis({
-            videos: s.videos, timeline: app.timeline(), settings: s.detectorSettings, only: missing,
+          const { analysis: fresh, layers } = await runMediaAnalysis({
+            videos: s.videos, timeline: app.timeline(), settings: s.detectorSettings, only: missing, layers: missingLayers,
             onProgress: ({ message, ratio }) => b.update(message, ratio),
           });
           analysis = { ...analysis, ...fresh, _params: { ...used, ...Object.fromEntries(missing.map((id) => [id, paramsOf(detectors().find((d) => d.id === id))])) } };
+          store.set({ layers: { ...store.get().layers, ...stampLayers(layers, key) } });
         }
         if (s.videos.length > 1) {
           b.update('ตรวจว่าไฟล์ต่อกันได้…', null);
@@ -437,13 +485,15 @@ const app = {
 // ---------- saving the open job ----------
 // The job record (minus the work, which lives in the store) for the open job.
 let job = null;
+let layerRun = null;
+const stampLayers = (layers, key) => Object.fromEntries(Object.entries(layers).map(([id, d]) => [id, { ...d, key }]));
 let loading = false;
 let warnedStorage = false;
 let warnedSave = false;
 const videoFacts = (v) => ({ name: v.name, size: v.size, duration: v.duration || 0, fps: v.fps || null });
 // state that is part of the work; changes to all but `analysis` count as edits (for "แก้หลังส่งออก")
-const PERSISTED = ['videos', 'transcript', 'anchors', 'anchorMode', 'analysis', 'edit', 'detectorSettings', 'exportProfile', 'exportOptions', 'outputBase'];
-const NOT_EDITS = new Set(['analysis']);
+const PERSISTED = ['videos', 'transcript', 'anchors', 'anchorMode', 'analysis', 'layers', 'edit', 'detectorSettings', 'exportProfile', 'exportOptions', 'exportExtras', 'outputBase'];
+const NOT_EDITS = new Set(['analysis', 'layers']);
 let snapshot = null;
 let lastStep = null;
 let lastName = null;
@@ -480,6 +530,7 @@ async function saveJob() {
     videos: s.videos.map(videoFacts),
     project,
     transcript: s.transcript || null,
+    layers: s.layers || {},
     summary: jobSummary(s),
   };
   try {

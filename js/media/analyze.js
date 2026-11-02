@@ -1,6 +1,6 @@
 // Media analysis that needs ffmpeg: runs every enabled detector with needs:'audio' or 'video'
 // over each file (one ffmpeg pass per detector per file) and converts results to global time.
-import { detectors } from '../core/registry.js';
+import { detectors, mediaLayers } from '../core/registry.js';
 import { mergeRanges } from '../core/plan.js';
 import { ffmpeg } from './ffmpeg.js';
 
@@ -48,35 +48,68 @@ export function compatSignature(streams) {
   }).join(' ');
 }
 
-/**
- * @param {{videos:{file:File,duration:number}[], timeline, settings:object, onProgress?:(info)=>void}} args
- * @returns {Promise<object>} {detectorId: [{start,end}] in global time}
- */
 export const isMediaDetector = (d) => d.needs === 'audio' || d.needs === 'video';
 
-export async function runMediaAnalysis({ videos, timeline, settings, only, onProgress }) {
-  const audioDetectors = detectors().filter((d) => isMediaDetector(d) && (settings[d.id]?.enabled ?? d.enabledByDefault !== false) && (!only || only.includes(d.id)));
-  const result = {};
-  if (!audioDetectors.length) return result;
+async function hasAudioStream(path) {
+  const { log } = await ffmpeg.run(['-hide_banner', '-i', path]);
+  return log.some((l) => /Stream #\d+:\d+.*Audio:/.test(l));
+}
+
+/**
+ * Measure the recordings: media detectors (e.g. silence) and media layers (e.g. the waveform).
+ * Everything that has `ffmpegOutput` shares one ffmpeg pass per file, so the audio is decoded once.
+ * @param {{videos:{file:File}[], timeline, settings:object, only?:string[], layers?:string[], onProgress?:(info)=>void}} args
+ *   only = detector ids to run (default: every enabled media detector), layers = media layer ids to build
+ * @returns {Promise<{analysis: object, layers: object}>} analysis = {detectorId: [{start,end}]}, layers = {layerId: data}, global time
+ */
+export async function runMediaAnalysis({ videos, timeline, settings, only, layers: layerIds = [], onProgress }) {
+  const dets = detectors().filter((d) => isMediaDetector(d) && (settings[d.id]?.enabled ?? d.enabledByDefault !== false) && (!only || only.includes(d.id)));
+  const lays = mediaLayers().filter((l) => layerIds.includes(l.id));
+  const analysis = {};
+  const layers = {};
+  if (!dets.length && !lays.length) return { analysis, layers };
   await ffmpeg.load((msg) => onProgress?.({ message: msg, ratio: 0 }));
   const paths = await ffmpeg.mountInputs(videos.map((v) => v.file));
-  const total = timeline.duration * audioDetectors.length || 1;
-  let doneBefore = 0;
-  for (const d of audioDetectors) {
-    const p = { ...(d.defaults || {}), ...(settings[d.id] || {}) };
-    const ranges = [];
-    for (let i = 0; i < videos.length; i++) {
-      const f = timeline.files[i];
-      onProgress?.({ message: `${d.label}: ไฟล์ ${i + 1}/${videos.length}`, ratio: doneBefore / total });
-      const { code, log } = await ffmpeg.run(d.ffmpegArgs(paths[i], p), {
-        onTime: (t) => onProgress?.({ message: `${d.label}: ไฟล์ ${i + 1}/${videos.length}`, ratio: (doneBefore + Math.min(t, f.duration)) / total }),
-      });
+  const total = timeline.duration || 1;
+  const params = (d) => ({ ...(d.defaults || {}), ...(settings[d.id] || {}) });
+  const ranges = Object.fromEntries(dets.map((d) => [d.id, []]));
+  const perFile = Object.fromEntries(lays.map((l) => [l.id, []]));
+  const what = [...dets, ...lays].map((x) => x.label).join(' และ ');
+
+  for (let i = 0; i < videos.length; i++) {
+    const f = timeline.files[i];
+    const message = videos.length > 1 ? `${what}: ไฟล์ ${i + 1}/${videos.length}` : what;
+    const progress = (t) => onProgress?.({ message, ratio: Math.min(1, (f.start + Math.min(t, f.duration)) / total) });
+    progress(0);
+    const audio = await hasAudioStream(paths[i]);
+    const usable = (x) => x.needs !== 'audio' || audio;
+    const shared = dets.filter((d) => d.ffmpegOutput && usable(d));
+    const alone = dets.filter((d) => !d.ffmpegOutput && usable(d));
+    const outPath = (l) => `/layer-${l.id}.bin`;
+    const layHere = lays.filter(usable);
+    for (const l of lays.filter((x) => !usable(x))) perFile[l.id].push({ data: null, file: f });
+
+    const outs = [...shared.flatMap((d) => d.ffmpegOutput(params(d))), ...layHere.flatMap((l) => l.ffmpegOutput(outPath(l)))];
+    if (outs.length) {
+      const { code, log } = await ffmpeg.run(['-hide_banner', '-i', paths[i], ...outs], { onTime: progress });
       if (code !== 0) throw new Error(`วิเคราะห์ ${f.name} ไม่สำเร็จ (ffmpeg code ${code})`);
-      for (const r of d.parseLog(log, f.duration)) ranges.push({ start: f.start + r.start, end: f.start + Math.min(r.end, f.duration) });
-      doneBefore += f.duration;
+      for (const d of shared) ranges[d.id].push(...toGlobal(d.parseLog(log, f.duration), f));
+      for (const l of layHere) {
+        const bytes = await ffmpeg.readFile(outPath(l));
+        await ffmpeg.deleteFile(outPath(l)).catch(() => {});
+        perFile[l.id].push({ data: l.collect({ bytes, file: f }), file: f });
+      }
     }
-    result[d.id] = mergeRanges(ranges, 0.5);
+    for (const d of alone) {
+      const { code, log } = await ffmpeg.run(d.ffmpegArgs(paths[i], params(d)), { onTime: progress });
+      if (code !== 0) throw new Error(`วิเคราะห์ ${f.name} ไม่สำเร็จ (ffmpeg code ${code})`);
+      ranges[d.id].push(...toGlobal(d.parseLog(log, f.duration), f));
+    }
   }
+  for (const d of dets) analysis[d.id] = mergeRanges(ranges[d.id], 0.5);
+  for (const l of lays) layers[l.id] = { ...l.combine(perFile[l.id], timeline.duration), version: l.version };
   onProgress?.({ message: 'วิเคราะห์เสร็จ', ratio: 1 });
-  return result;
+  return { analysis, layers };
 }
+
+const toGlobal = (rs, f) => rs.map((r) => ({ start: f.start + r.start, end: f.start + Math.min(r.end, f.duration) }));

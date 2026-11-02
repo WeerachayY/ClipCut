@@ -8,7 +8,7 @@ import { createTimeMap } from './timemap.js';
 export function mapLines(transcript, anchors, mode) {
   if (!transcript || !transcript.lines) return [];
   const map = createTimeMap(anchors, mode);
-  return transcript.lines.map((l) => ({ ...l, g: map.toTimeline(l.tau) })).sort((a, b) => a.g - b.g);
+  return transcript.lines.map((l) => ({ ...l, g: map.toTimeline(l.tau), ...(Number.isFinite(l.tauEnd) ? { gEnd: map.toTimeline(l.tauEnd) } : {}) })).sort((a, b) => a.g - b.g);
 }
 
 /**

@@ -63,6 +63,31 @@ export function addMark(edit, at, duration, { origin = 'manual', split = false, 
   return { edit: { marks: sortMarks([...edit.marks, { id, at: t, origin, moved: false, split, label }]), pieces }, id };
 }
 
+/**
+ * Throw away everything between a and b (e.g. selected transcript lines): cut points at both ends,
+ * every piece inside set to `status`. Returns the keys of those pieces.
+ */
+export function deleteRange(edit, a, b, duration, status = 'delete') {
+  if (!(b - a >= 0.1)) return { edit, keys: [] };
+  let e = addMark(edit, a, duration).edit;
+  e = addMark(e, b, duration).edit;
+  const keys = [];
+  for (const p of piecesOf(e, duration)) {
+    if (p.start >= a - SNAP && p.end <= b + SNAP) { e = setPieceStatus(e, p.key, status); keys.push(p.key); }
+  }
+  return { edit: e, keys };
+}
+
+/** Bring back thrown-away pieces that lie mostly inside a..b (cut points stay; join them to tidy up). */
+export function keepRange(edit, a, b, duration) {
+  let e = edit;
+  for (const p of piecesOf(edit, duration)) {
+    const inside = Math.max(0, Math.min(b, p.end) - Math.max(a, p.start));
+    if (p.status === 'delete' && inside >= (p.end - p.start) * 0.5) e = setPieceStatus(e, p.key, 'keep');
+  }
+  return e;
+}
+
 /** Remove a cut point ("join"). The merged piece is always kept: joining never deletes content. */
 export function removeMark(edit, id) {
   const marks = sortMarks(edit.marks);

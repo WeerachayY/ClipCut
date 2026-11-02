@@ -10,8 +10,10 @@ export function parseCues(text) {
     const rows = block.split('\n');
     const i = rows.findIndex((r) => CUE_RE.test(r));
     if (i < 0) continue;
-    const startStr = rows[i].split('-->')[0].trim();
-    const tau = parseTimecode(startStr.split(':').length === 2 ? `0:${startStr}` : startStr);
+    const [startStr, endRaw] = rows[i].split('-->').map((x) => x.trim());
+    const tc = (x) => parseTimecode(x.split(':').length === 2 ? `0:${x}` : x);
+    const tau = tc(startStr);
+    const tauEnd = tc((endRaw || '').split(/\s/)[0] || '');
     let body = rows.slice(i + 1).join(' ').trim();
     let speaker = '';
     const v = body.match(/^<v(?:\.[^ >]*)?\s+([^>]+)>/);
@@ -19,7 +21,7 @@ export function parseCues(text) {
     body = body.replace(/<[^>]+>/g, '').trim();
     const colon = !speaker && body.match(/^([^:]{1,40}):\s+(.*)$/);
     if (colon) { speaker = colon[1]; body = colon[2]; }
-    if (Number.isFinite(tau) && body) lines.push({ tau, speaker, text: body });
+    if (Number.isFinite(tau) && body) lines.push({ tau, ...(Number.isFinite(tauEnd) && tauEnd > tau ? { tauEnd } : {}), speaker, text: body });
   }
   return lines;
 }

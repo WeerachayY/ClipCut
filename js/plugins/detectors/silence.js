@@ -28,9 +28,13 @@ export default {
     { key: 'minSilence', label: 'นับเฉพาะช่วงเงียบยาวกว่า', type: 'number', unit: 'วินาที', min: 2, step: 1 },
     { key: 'standaloneMin', label: 'เสนอตัดแม้ไม่มี transcript เมื่อเงียบเกิน', type: 'number', unit: 'วินาที', min: 30, step: 10 },
   ],
-  /** Args for one input file; output goes to the log. */
+  /** Output args for the shared per-file pass (the audio is decoded once for all detectors and layers). */
+  ffmpegOutput(p) {
+    return ['-map', '0:a:0', '-af', `silencedetect=noise=${p.noiseDb}dB:d=${p.minSilence}`, '-f', 'null', '-'];
+  },
+  /** Args for one input file on its own; output goes to the log. */
   ffmpegArgs(inputPath, p) {
-    return ['-hide_banner', '-i', inputPath, '-vn', '-sn', '-dn', '-map', '0:a:0?', '-af', `silencedetect=noise=${p.noiseDb}dB:d=${p.minSilence}`, '-f', 'null', '-'];
+    return ['-hide_banner', '-i', inputPath, '-vn', '-sn', '-dn', ...this.ffmpegOutput(p)];
   },
   parseLog: parseSilenceLog,
   detect(ctx, p) {

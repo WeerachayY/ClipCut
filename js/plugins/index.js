@@ -1,6 +1,6 @@
 // The one place where features are switched on. To add a feature, import its module and
 // register it here. Order matters only for display order in the UI.
-import { registerTranscriptParser, registerDetector, registerExportProfile } from '../core/registry.js';
+import { registerTranscriptParser, registerDetector, registerExportProfile, registerMediaLayer, registerTrack, registerExportExtra } from '../core/registry.js';
 
 import saraDocx from './transcript/sara-docx.js';
 import vtt from './transcript/vtt.js';
@@ -13,6 +13,14 @@ import silence from './detectors/silence.js';
 import copy from './export/copy.js';
 import compressH264 from './export/compress-h264.js';
 
+import report from './extras/report.js';
+import srt from './extras/srt.js';
+
+import waveformLayer from './layers/waveform.js';
+
+import filmstripTrack from './tracks/filmstrip.js';
+import waveformTrack from './tracks/waveform.js';
+
 registerTranscriptParser(saraDocx);
 registerTranscriptParser(vtt);
 registerTranscriptParser(bracketText);
@@ -23,3 +31,11 @@ registerDetector(silence);
 
 registerExportProfile(copy);
 registerExportProfile(compressH264);
+
+registerExportExtra(report);
+registerExportExtra(srt);
+
+registerMediaLayer(waveformLayer);
+
+registerTrack(filmstripTrack);
+registerTrack(waveformTrack);

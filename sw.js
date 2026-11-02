@@ -5,7 +5,7 @@
 // files of two releases breaks in odd ways (buttons that do nothing, missing styles).
 // Vendored libraries (ffmpeg core): cache-first, a given path never changes.
 // VERSION must match js/version.js (checked by tests).
-const VERSION = 'clipcut-0.5.1';
+const VERSION = 'clipcut-0.6.0';
 const SHELL = ['./', './index.html', './css/app.css', './js/main.js', './manifest.webmanifest', './icons/favicon.svg', './icons/icon.svg', './icons/icon-192.png'];
 
 // Releases up to 0.4.0 served app code stale-while-revalidate, so the first visit after an update could mix

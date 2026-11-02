@@ -2,10 +2,12 @@
 import { h, clear, icon, toast, ask } from './dom.js';
 import { MultiPlayer } from './player.js';
 import { TimelineView } from './timeline-view.js';
+import { FrameSource } from '../media/frames.js';
 import { formatTime, formatDuration, formatTimecode } from '../core/time.js';
 import { buildPlan } from '../core/plan.js';
 import * as C from '../core/cuts.js';
 import { mapLines, proposeAnchors } from '../core/analysis.js';
+import { lineSpans, lineStates, rangeOfLines, quietestNear } from '../core/textedit.js';
 import { newId } from '../core/store.js';
 
 const BADGE = { delete: 'ทิ้ง', high: 'แนะนำให้ทิ้ง', check: 'ควรเช็ค', rejected: 'เก็บไว้' };
@@ -22,6 +24,7 @@ const SHORTCUTS = [
   ['Q', 'ทิ้งส่วนก่อนตำแหน่งเล่นในชิ้นนั้น', true],
   ['W', 'ทิ้งส่วนหลังตำแหน่งเล่นในชิ้นนั้น', true],
   ['Delete / Backspace', 'ทิ้ง/เก็บชิ้นที่เลือก หรือต่อกลับจุดตัดที่เลือก', 'Delete = ลบคลิปที่เลือก'],
+  ['Delete (ในแท็บ Transcript)', 'ทิ้งช่วงของบรรทัดที่เลือก', 'เหมือนแก้วิดีโอด้วยข้อความ'],
   ['Ctrl + Z', 'ย้อนกลับ', true],
   ['Ctrl + Shift + Z / Ctrl + Y', 'ทำซ้ำ', true],
   ['Ctrl + = / Ctrl + -', 'ซูม timeline เข้า / ออก (หรือ Ctrl + ล้อเมาส์)', true],
@@ -327,17 +330,25 @@ export function mount(root, app) {
     if (selEl) scrollWithin(sideBody, selEl, false);
   }
 
-  // ---------- side: transcript + sync anchors ----------
+  // ---------- side: transcript (cut by text, like CapCut's text-based editing) + sync anchors ----------
+  let spans = [];
+  let textSel = null;   // {a, b}: selected transcript lines (a = where the selection started)
+  let syncOpen = false;
+  let textBar = null;
+
   function renderSync() {
     const st = s();
     if (!st.transcript) {
-      clear(sideBody, h('p.empty', 'ไม่มี transcript ในงานนี้ เพิ่มได้ที่ขั้น “ตรวจไฟล์”'));
+      textBar = null;
+      clear(sideBody, h('p.empty', 'ไม่มี transcript ในงานนี้ เพิ่มได้ที่ขั้น “ไฟล์”'));
       return;
     }
     lines = mapLines(st.transcript, st.anchors, st.anchorMode);
+    spans = lineSpans(lines, D());
+    if (textSel && Math.max(textSel.a, textSel.b) >= lines.length) textSel = null;
     const anchors = [...st.anchors].sort((a, b) => a.tau - b.tau);
     const setAnchors = (list) => { store.set({ anchors: list }); app.resuggest(); };
-    lineEls = lines.map((l) => h('li.tline', { dataset: { g: l.g } },
+    lineEls = lines.map((l, i) => h('li.tline', { dataset: { i, g: l.g } },
       h('button.ghost.small.tc', { type: 'button', onclick: () => player.seek(l.g - 1, { play: true }), title: 'เล่นจากบรรทัดนี้' }, formatTime(l.g)),
       h('div.tl-text', l.speaker ? h('span.spk', `${l.speaker}: `) : null, l.text),
       h('button.ghost.icon-only.pin', { type: 'button', title: 'ปักหมุด: บรรทัดนี้เริ่มพูดตรงตำแหน่งเล่นตอนนี้', 'aria-label': 'ปักหมุดเวลา',
@@ -359,27 +370,111 @@ export function mount(root, app) {
         h('button.secondary.small', { type: 'button', onclick: () => { proposals = proposals.filter((x) => x !== p); setAnchors([...s().anchors.filter((a) => a.tau !== p.tau), { id: newId('a'), tau: p.tau, g: p.g, lineIdx: p.lineIdx }]); } }, 'ใช้'))))
         : h('p.hint', 'ไม่พบจุดที่จับคู่ได้ชัดเจน')) : null;
 
+    const list = h('ol.tlines', lineEls);
+    // select lines: click, Shift+click, or drag across lines
+    list.addEventListener('pointerdown', (e) => {
+      const li = e.target.closest('.tline');
+      if (!li || e.button !== 0 || e.target.closest('button')) return;
+      e.preventDefault();
+      const i = Number(li.dataset.i);
+      textSel = e.shiftKey && textSel ? { a: textSel.a, b: i } : { a: i, b: i };
+      if (s().selection) store.set({ selection: null });
+      if (!e.shiftKey) player.seek(spans[i].start);
+      paintText();
+      const move = (ev) => {
+        const el = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('.tline');
+        if (!el || !list.contains(el) || !textSel) return;
+        const j = Number(el.dataset.i);
+        if (j !== textSel.b) { textSel = { a: textSel.a, b: j }; paintText(); }
+      };
+      const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+    });
+
+    textBar = h('div.text-bar');
     clear(sideBody,
-      h('div.sync-head',
-        h('p.hint', 'ถ้าบรรทัดที่ไฮไลต์ขึ้นก่อนหรือหลังเสียงจริง ให้เล่นวิดีโอ แล้วกดหมุดของบรรทัดนั้นตอนที่ได้ยินประโยคเริ่ม ปักหลายจุดได้ถ้าเวลาคลาดไม่เท่ากันทั้งไฟล์'),
-        h('label.field.inline', h('span', 'ระหว่างหมุด'),
-          h('select', { onchange: (e) => { store.set({ anchorMode: e.target.value }); app.resuggest(); } },
-            h('option', { value: 'linear', selected: st.anchorMode === 'linear' }, 'ค่อย ๆ ไล่เวลา (เวลาคลาดสะสม)'),
-            h('option', { value: 'step', selected: st.anchorMode === 'step' }, 'กระโดดที่หมุด (บันทึกถูกหยุดแล้วเริ่มใหม่)'))),
-        anchors.length ? h('ul.anchor-list', anchorRows) : h('p.hint', 'ยังไม่มีหมุด ใช้เวลาตาม transcript ตรง ๆ'),
-        silence ? h('button.secondary.small', { type: 'button', onclick: () => { proposals = proposeAnchors({ transcript: st.transcript, anchors: st.anchors, anchorMode: st.anchorMode, silence }); renderSync(); } }, icon('target', 15), 'หาหมุดจากจุดที่เสียงกลับมา') : null,
-        propBox,
+      h('details.sync-tools', { open: syncOpen || null, ontoggle: (e) => { syncOpen = e.target.open; } },
+        h('summary', 'ปรับเวลาให้ตรงกับเสียง', anchors.length ? h('span.count', ` · หมุด ${anchors.length}`) : null),
+        h('div.sync-head',
+          h('p.hint', 'ถ้าบรรทัดที่ไฮไลต์ขึ้นก่อนหรือหลังเสียงจริง ให้เล่นวิดีโอ แล้วกดหมุดของบรรทัดนั้นตอนที่ได้ยินประโยคเริ่ม ปักหลายจุดได้ถ้าเวลาคลาดไม่เท่ากันทั้งไฟล์'),
+          h('label.field.inline', h('span', 'ระหว่างหมุด'),
+            h('select', { onchange: (e) => { store.set({ anchorMode: e.target.value }); app.resuggest(); } },
+              h('option', { value: 'linear', selected: st.anchorMode === 'linear' }, 'ค่อย ๆ ไล่เวลา (เวลาคลาดสะสม)'),
+              h('option', { value: 'step', selected: st.anchorMode === 'step' }, 'กระโดดที่หมุด (บันทึกถูกหยุดแล้วเริ่มใหม่)'))),
+          anchors.length ? h('ul.anchor-list', anchorRows) : h('p.hint', 'ยังไม่มีหมุด ใช้เวลาตาม transcript ตรง ๆ'),
+          silence ? h('button.secondary.small', { type: 'button', onclick: () => { proposals = proposeAnchors({ transcript: st.transcript, anchors: st.anchors, anchorMode: st.anchorMode, silence }); syncOpen = true; renderSync(); } }, icon('target', 15), 'หาหมุดจากจุดที่เสียงกลับมา') : null,
+          propBox)),
+      h('div.text-head',
         h('label.tick.small', h('input', { type: 'checkbox', checked: follow, onchange: (e) => { follow = e.target.checked; } }), h('span', 'เลื่อนตามตำแหน่งเล่น'))),
-      h('ol.tlines', lineEls));
+      textBar,
+      list);
+    paintText();
+  }
+
+  /** Line marks (thrown away, suggested, selected) and the selection bar, without rebuilding the list. */
+  function paintText() {
+    if (sideView !== 'sync' || !lineEls.length) return;
+    const states = lineStates(spans, C.piecesOf(s().edit, D()));
+    const lo = textSel ? Math.min(textSel.a, textSel.b) : -1;
+    const hi = textSel ? Math.max(textSel.a, textSel.b) : -2;
+    lineEls.forEach((el, i) => {
+      el.classList.toggle('gone', states[i] === 'gone');
+      el.classList.toggle('partly', states[i] === 'partly');
+      el.classList.toggle('maybe', states[i] === 'suggested');
+      el.classList.toggle('sel', i >= lo && i <= hi);
+    });
+    if (!textBar) return;
+    // the bar keeps its place (hint when nothing is chosen), so the lines never jump under the mouse
+    textBar.classList.toggle('on', !!textSel);
+    if (!textSel) {
+      clear(textBar, h('span.tb-hint', 'คลิกบรรทัดเพื่อเลือก ลากหรือ Shift+คลิกเพื่อเลือกหลายบรรทัด แล้วกด ', h('kbd', 'Delete'), ' เพื่อทิ้งช่วงนั้น'));
+      return;
+    }
+    const r = rangeOfLines(spans, lo, hi);
+    const anyGone = states.slice(lo, hi + 1).some((x) => x === 'gone' || x === 'partly');
+    clear(textBar,
+      h('span.tb-info', `${r.count} บรรทัด · ${formatDuration(r.end - r.start)}`),
+      h('button.danger-fill.small', { type: 'button', onclick: cutText, 'data-tip': 'ทิ้งช่วงนี้ · Delete' }, icon('scissors', 15), 'ทิ้ง'),
+      anyGone ? h('button.secondary.small', { type: 'button', onclick: keepText }, 'เก็บกลับ') : null,
+      h('button.secondary.small', { type: 'button', onclick: () => player.seek(r.start, { play: true }) }, icon('play', 13), 'เล่น'),
+      h('button.ghost.icon-only.small', { type: 'button', 'aria-label': 'ยกเลิกการเลือก', 'data-tip': 'ยกเลิกการเลือก · Esc', onclick: () => { textSel = null; paintText(); } }, icon('x', 15)));
+  }
+
+  /** The selected lines as a timeline range, with both ends moved into the nearest pause when there is a waveform. */
+  function textRange() {
+    const r = rangeOfLines(spans, textSel.a, textSel.b);
+    const wf = app.validLayers().waveform;
+    return { start: frameAt(quietestNear(wf, r.start)), end: frameAt(quietestNear(wf, r.end)) };
+  }
+
+  function cutText() {
+    if (!textSel) return;
+    const { start, end } = textRange();
+    const { edit: next, keys } = C.deleteRange(s().edit, start, end, D());
+    if (!keys.length) { toast('ช่วงนี้สั้นเกินไป', 'error'); return; }
+    textSel = null;
+    app.commitEdit(next, { selection: { type: 'piece', key: keys[0] } });
+    toast(`ทิ้ง ${formatTime(start)} – ${formatTime(end)} แล้ว · Ctrl+Z เพื่อย้อนกลับ`);
+  }
+
+  function keepText() {
+    if (!textSel) return;
+    const { start, end } = textRange();
+    textSel = null;
+    app.commitEdit(C.keepRange(s().edit, start, end, D()));
+  }
+
+  function renderTabs() {
+    const n = C.counts(s().edit, D());
+    segPieces.textContent = `ชิ้นที่ทิ้ง (${n.delete + n.suggested})`;
+    segSync.textContent = 'Transcript';
+    segPieces.setAttribute('aria-selected', String(sideView === 'pieces'));
+    segSync.setAttribute('aria-selected', String(sideView === 'sync'));
   }
 
   function renderSide() {
-    const st = s();
-    const n = C.counts(st.edit, D());
-    segPieces.textContent = `ชิ้นที่ทิ้ง (${n.delete + n.suggested})`;
-    segSync.textContent = 'Transcript และหมุดเวลา';
-    segPieces.setAttribute('aria-selected', String(sideView === 'pieces'));
-    segSync.setAttribute('aria-selected', String(sideView === 'sync'));
+    renderTabs();
     if (sideView === 'pieces') renderPieces(); else renderSync();
   }
 
@@ -408,7 +503,8 @@ export function mount(root, app) {
         lineEls[currentLine]?.classList.remove('now');
         currentLine = idx;
         const el = lineEls[idx];
-        if (el) { el.classList.add('now'); if (follow) scrollWithin(sideBody, el, true); }
+        // no auto-scroll while the user is choosing lines: the list would move under the mouse
+        if (el) { el.classList.add('now'); if (follow && !textSel) scrollWithin(sideBody, el, true); }
       }
     }
   }
@@ -461,7 +557,8 @@ export function mount(root, app) {
     if (lower === 'w') { done(); trim('right'); return; }
     if (lower === 'k') { done(); player.pause(); setRate(1); return; }
     if (lower === 'l') { done(); if (!player.playing) { setRate(1); player.play(); } else setRate(RATES[Math.min(RATES.length - 1, RATES.indexOf(player.video.playbackRate) + 1)] || 1); return; }
-    if (k === 'Escape') { done(); select(null); return; }
+    if (k === 'Escape') { done(); if (textSel) { textSel = null; paintText(); } else select(null); return; }
+    if (textSel && (k === 'Delete' || k === 'Backspace' || lower === 'x')) { done(); cutText(); return; }
     if (k === '?') { done(); showKeys(); return; }
     if (lower === 's') { done(); if (sel?.type === 'mark') act('split'); else markHere({ split: true }); return; }
     if (!sel) return;
@@ -478,14 +575,28 @@ export function mount(root, app) {
   const onResize = () => { timelineView.resize(); renderTimeline(); };
   window.addEventListener('resize', onResize);
 
+  // ---------- media for the lanes (stills, waveform) ----------
+  const frames = new FrameSource({ timeline: tl, videos: s().videos });
+  let lastMedia = null;
+  const syncMedia = (st) => {
+    const sig = [st.layers, st.layerProgress, st.analysis];
+    if (lastMedia && sig.every((v, i) => v === lastMedia[i])) return;
+    lastMedia = sig;
+    timelineView.setMedia({ frames, layers: app.validLayers(), progress: st.layerProgress, analysis: st.analysis });
+  };
+  syncMedia(s());
+  app.ensureLayers();
+
   // ---------- store wiring ----------
   let last = null;
   const unsub = store.subscribe((st) => {
     undoBtn.disabled = !app.canUndo();
     redoBtn.disabled = !app.canRedo();
+    syncMedia(st);
     const sig = [st.edit, st.anchors, st.anchorMode, st.selection, st.transcript, st.videos];
     if (last && sig.every((v, i) => v === last[i])) return;
     const linesChanged = !last || last[1] !== sig[1] || last[2] !== sig[2] || last[4] !== sig[4];
+    const editChanged = !last || last[0] !== sig[0] || last[3] !== sig[3];
     last = sig;
     tl = app.timeline();
     // drop a selection that no longer exists (e.g. after joining)
@@ -493,8 +604,10 @@ export function mount(root, app) {
       store.set({ selection: null });
       return;
     }
+    if (st.selection && textSel) textSel = null; // picking something on the timeline ends a text selection
     renderTimeline();
     if (sideView === 'pieces' || linesChanged) renderSide();
+    else if (editChanged) { renderTabs(); paintText(); }
   });
 
   player.load(tl, s().videos.map((v) => v.url));
@@ -509,6 +622,8 @@ export function mount(root, app) {
 
   return () => {
     unsub();
+    timelineView.dispose();
+    frames.dispose();
     document.removeEventListener('keydown', onKey);
     window.removeEventListener('resize', onResize);
     player.pause();

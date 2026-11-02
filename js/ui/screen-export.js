@@ -1,8 +1,10 @@
 import { h, clear, icon, toast } from './dom.js';
-import { exportProfiles, getExportProfile } from '../core/registry.js';
+import { exportProfiles, getExportProfile, exportExtras } from '../core/registry.js';
+import { mapLines } from '../core/analysis.js';
+import { lineSpans } from '../core/textedit.js';
 import { buildPlan, estimatePartBytes } from '../core/plan.js';
 import { counts } from '../core/cuts.js';
-import { formatTime, formatBytes, formatDuration } from '../core/time.js';
+import { formatTime, formatBytes } from '../core/time.js';
 import { runExport, partFileName, safeName, MAX_OUTPUT_BYTES } from '../media/export.js';
 import { ffmpeg } from '../media/ffmpeg.js';
 import { ensureWritable, outputDir, writeFileTo } from '../io/folder.js';
@@ -12,19 +14,14 @@ function defaultBase(videos) {
   return `${n.replace(/\.[^.]+$/, '')}_ตัดแล้ว`;
 }
 
-/** A plain-text record of what was cut, handy as chapter notes. */
-function cutReport(plan, timeline, names) {
-  const L = [];
-  L.push(`ClipCut — สรุปการตัด (${new Date().toLocaleString('th-TH')})`);
-  L.push(`ต้นฉบับ: ${timeline.files.map((f) => f.name).join(' + ')} (${formatTime(timeline.duration)})`);
-  L.push(`ตัดออก: ${formatTime(plan.removedDuration)} · เหลือ: ${formatTime(plan.keptDuration)}`);
-  L.push('');
-  L.push('ช่วงที่ตัดออก (เวลาในต้นฉบับ):');
-  plan.removed.forEach((r, i) => L.push(`  ${i + 1}. ${formatTime(r.start)} – ${formatTime(r.end)} (${formatDuration(r.end - r.start)})`));
-  L.push('');
-  L.push('ไฟล์ผลลัพธ์:');
-  plan.parts.forEach((p, i) => L.push(`  ${names[i]}  ความยาว ${formatTime(p.duration)}  มาจาก ${formatTime(p.from)} – ${formatTime(p.to)}`));
-  return L.join('\r\n');
+/** Side files (captions, report…): which are on, with their options. */
+function extrasState(st, ctx) {
+  return exportExtras().map((x) => {
+    const saved = st.exportExtras?.[x.id] || {};
+    const options = { ...Object.fromEntries((x.options || []).map((o) => [o.key, o.default])), ...saved };
+    const available = x.available ? x.available(ctx) : true;
+    return { x, available, on: available && (saved.on ?? x.defaultOn !== false), options };
+  });
 }
 
 export function mount(root, app) {
@@ -80,11 +77,16 @@ export function mount(root, app) {
         onProgress: (p) => { progress = p; renderProgress(); },
       });
       const names = res.map((r) => r.name);
-      const report = cutReport(plan, tl, names);
-      const reportName = `${safeName(base) || 'video'}_สรุปการตัด.txt`;
-      const reportBytes = new TextEncoder().encode(report);
-      await writeOutput(reportName, reportBytes);
-      results = { files: [...res, { name: reportName, bytes: reportBytes.byteLength, duration: null }], where };
+      const ctx = extrasContext(st, tl, plan, base, names);
+      const sideFiles = [];
+      for (const ex of extrasState(st, ctx).filter((e) => e.on)) {
+        for (const f of ex.x.build({ ...ctx, options: ex.options })) {
+          const bytes = typeof f.data === 'string' ? new TextEncoder().encode(f.data) : f.data;
+          await writeOutput(f.name, bytes);
+          sideFiles.push({ name: f.name, bytes: bytes.byteLength, duration: null });
+        }
+      }
+      results = { files: [...res, ...sideFiles], where };
       toast('ส่งออกเสร็จแล้ว', 'success');
       app.markExported();
     } catch (e) {
@@ -113,6 +115,30 @@ export function mount(root, app) {
     clear(progressBox,
       h('div.progress-msg', `${p.message}${p.parts > 1 ? ` (${p.part + 1}/${p.parts})` : ''}${speed}`),
       h('div.bar.on', h('div.bar-fill', { style: { width: `${Math.round((p.ratio || 0) * 100)}%` } })));
+  }
+
+  function extrasContext(st, tl, plan, base, names) {
+    const spans = st.transcript ? lineSpans(mapLines(st.transcript, st.anchors, st.anchorMode), tl.duration) : [];
+    return { plan, timeline: tl, base, fileBase: safeName(base) || 'video', names, spans, transcript: st.transcript };
+  }
+
+  function setExtra(id, patch) {
+    const cur = store.get().exportExtras || {};
+    store.set({ exportExtras: { ...cur, [id]: { ...(cur[id] || {}), ...patch } } });
+  }
+
+  function extrasForm(st, tl, plan, base, profile) {
+    const names = plan.parts.map((p) => partFileName(base, p, plan.parts.length, profile.outputExtension));
+    const list = extrasState(st, extrasContext(st, tl, plan, base, names));
+    if (!list.length) return null;
+    return h('fieldset.extras', h('legend', 'ไฟล์ที่ได้เพิ่ม'),
+      list.map(({ x, available, on, options }) => h('div.extra',
+        h('label.tick', h('input', { type: 'checkbox', checked: on, disabled: running || !available, onchange: (e) => setExtra(x.id, { on: e.target.checked }) }),
+          h('span', x.label, !available && x.unavailableHint ? h('span.hint', ` · ${x.unavailableHint}`) : null)),
+        x.description ? h('p.hint', x.description) : null,
+        on && x.options?.length ? h('div.extra-options', x.options.map((o) => (o.type === 'checkbox'
+          ? h('label.tick.small', h('input', { type: 'checkbox', checked: options[o.key] !== false, disabled: running, onchange: (e) => setExtra(x.id, { [o.key]: e.target.checked }) }), h('span', o.label))
+          : null))) : null)));
   }
 
   function render() {
@@ -158,7 +184,8 @@ export function mount(root, app) {
           h('label.field',
             h('span', 'ชื่อไฟล์'),
             h('input', { type: 'text', value: base, disabled: running, onchange: (e) => store.set({ outputBase: e.target.value.trim() }) })),
-          h('p.hint', toFolder ? `บันทึกลงโฟลเดอร์ output ใน “${st.source.name}” พร้อมไฟล์สรุปการตัด (.txt)` : 'ไฟล์จะถูกดาวน์โหลดผ่าน browser'),
+          extrasForm(st, tl, plan, base, profile),
+          h('p.hint', toFolder ? `บันทึกลงโฟลเดอร์ output ใน “${st.source.name}”` : 'ไฟล์จะถูกดาวน์โหลดผ่าน browser'),
           h('div.export-actions',
             running
               ? h('button.secondary', { type: 'button', onclick: cancel }, icon('x', 16), 'ยกเลิก')
