@@ -1,24 +1,70 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000">
   <title>ClipCut</title>
   <defs>
-    <radialGradient id="bg" cx="0.92" cy="0.06" r="1.05">
-      <stop offset="0" stop-color="#4B2BA6"/>
-      <stop offset="0.5" stop-color="#151A55"/>
-      <stop offset="1" stop-color="#090D2C"/>
+    
+    <radialGradient id="bgGrad" cx="85%" cy="15%" r="90%">
+      <stop offset="0%" stop-color="#3b0d75" />
+      <stop offset="45%" stop-color="#050b38" />
+      <stop offset="100%" stop-color="#020314" />
     </radialGradient>
-    <linearGradient id="top" gradientUnits="userSpaceOnUse" x1="20" y1="13" x2="47" y2="29"><stop offset="0" stop-color="#22D3EE"/><stop offset="1" stop-color="#FF8A2A"/></linearGradient>
-    <linearGradient id="bottom" gradientUnits="userSpaceOnUse" x1="47" y1="29" x2="20" y2="45"><stop offset="0" stop-color="#FF8A2A"/><stop offset="1" stop-color="#F21FB4"/></linearGradient>
-    <linearGradient id="left" gradientUnits="userSpaceOnUse" x1="20" y1="45" x2="20" y2="13"><stop offset="0" stop-color="#F21FB4"/><stop offset="1" stop-color="#22D3EE"/></linearGradient>
-    <linearGradient id="bar" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#FF2D55"/><stop offset="0.42" stop-color="#FFE14D"/><stop offset="0.8" stop-color="#22D3EE"/><stop offset="1" stop-color="#3B82F6"/>
+
+    
+    <linearGradient id="playBorderGrad" x1="0%" y1="0%" x2="85%" y2="85%">
+      <stop offset="0%" stop-color="#00f2fe" />
+      <stop offset="28%" stop-color="#0072ff" />
+      <stop offset="55%" stop-color="#d800ff" />
+      <stop offset="80%" stop-color="#ff0055" />
+      <stop offset="100%" stop-color="#ffaa00" />
     </linearGradient>
+
+    
+    <linearGradient id="playWarmOverlay" x1="25%" y1="15%" x2="95%" y2="50%">
+      <stop offset="0%" stop-color="#00f2fe" stop-opacity="0" />
+      <stop offset="50%" stop-color="#6875f5" stop-opacity="0.5" />
+      <stop offset="100%" stop-color="#ffaa00" stop-opacity="1" />
+    </linearGradient>
+
+    
+    <linearGradient id="barGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#ff0055" />
+      <stop offset="22%" stop-color="#ff6600" />
+      <stop offset="42%" stop-color="#ffee00" />
+      <stop offset="65%" stop-color="#00ffaa" />
+      <stop offset="85%" stop-color="#00ccff" />
+      <stop offset="100%" stop-color="#0077ff" />
+    </linearGradient>
+
+    
+    <filter id="dropShadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="14" stdDeviation="20" flood-color="#000000" flood-opacity="0.55" />
+    </filter>
   </defs>
-  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
-  <g fill="none" stroke-width="5" stroke-linecap="round">
-    <line x1="20" y1="13" x2="47" y2="29" stroke="url(#top)"/>
-    <line x1="47" y1="29" x2="20" y2="45" stroke="url(#bottom)"/>
-    <line x1="20" y1="45" x2="20" y2="13" stroke="url(#left)"/>
+  <rect width="1000" height="1000" rx="230" fill="url(#bgGrad)"/>
+  <g transform="translate(500 500) scale(1.22) translate(-500 -417)">
+    <g>
+    <path d="M 275 170
+             A 75 75 0 0 1 388 106
+             L 755 320
+             A 75 75 0 0 1 755 450
+             L 388 664
+             A 75 75 0 0 1 275 600
+             Z" fill="url(#playBorderGrad)" />
+    <path d="M 275 170
+             A 75 75 0 0 1 388 106
+             L 755 320
+             A 75 75 0 0 1 755 450
+             L 388 664
+             A 75 75 0 0 1 275 600
+             Z" fill="url(#playWarmOverlay)" />
+    <path d="M 316 208
+             A 52 52 0 0 1 395 163
+             L 712 347
+             A 52 52 0 0 1 712 437
+             L 395 621
+             A 52 52 0 0 1 316 576
+             Z" fill="#fbf9f5" />
   </g>
-  <polygon points="20,13 47,29 20,45" fill="#F8F8FB"/>
-  <rect x="11" y="51" width="42" height="5" rx="2.5" fill="url(#bar)"/>
+    <g fill="#05072e"><rect x="344" y="300" width="256" height="64" rx="24" transform="rotate(-14 344 300)"/><rect x="348" y="344" width="248" height="170" rx="30"/></g>
+    <rect x="142" y="668" width="716" height="68" rx="34" fill="url(#barGrad)" />
+  </g>
 </svg>

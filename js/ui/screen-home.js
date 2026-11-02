@@ -163,7 +163,7 @@ export function mount(root, app) {
     if (jobs === null) { clear(wrap); return; }
     if (!jobs.length) {
       clear(wrap, h('div.home-empty',
-        h('img.home-logo', { src: './icons/icon.svg', alt: '', width: 112, height: 112 }),
+        h('img.home-logo', { src: './icons/icon.svg', alt: '', width: 120, height: 120 }),
         h('h1', 'ClipCut'),
         h('p.lede', 'ตัดช่วงที่ไม่ต้องการออกจากวิดีโอ ต่อหลายไฟล์เป็นไฟล์เดียว หรือแบ่งเป็นหลายตอน'),
         newJobCard(true),

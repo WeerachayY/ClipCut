@@ -148,7 +148,8 @@ js/plugins/                               ฟีเจอร์ที่ถอ�
 js/media/                                 งานที่แตะวิดีโอ: ffmpeg.wasm, อ่าน keyframe, วิเคราะห์เสียง, ส่งออก
 js/io/                                    เปิดโฟลเดอร์/ไฟล์, อ่าน zip (.docx), บันทึกไฟล์, รายการงาน (jobs-db.js)
 js/ui/                                    หน้ารายการงาน, หน้าจอทั้ง 3 ขั้น, timeline, player
-icons/                                    icon.svg (ต้นฉบับ), favicon.svg (แบบเรียบสำหรับขนาดเล็ก), PNG สำหรับติดตั้งแอป
+icons/                                    logo-source.svg (โลโก้ต้นฉบับ มีตัวหนังสือ), icon.svg (ไอคอนแอป), favicon.svg (แบบเรียบสำหรับขนาดเล็ก),
+                                          PNG สำหรับติดตั้งแอป — สร้างใหม่ด้วย scripts/make-icons.py
 vendor/                                   ffmpeg.wasm และฟอนต์ (ดู vendor/README.md)
 tests/                                    ทดสอบด้วย `node --test tests/*.test.mjs`
 ```

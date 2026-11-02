@@ -1,6 +1,6 @@
 {
   "name": "clipcut",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "description": "PWA สำหรับตัด ต่อ และแบ่งวิดีโอ หาช่วงเงียบและช่วงที่ไม่มีคนพูดให้อัตโนมัติ ประมวลผลในเครื่องด้วย ffmpeg.wasm",
   "type": "module",

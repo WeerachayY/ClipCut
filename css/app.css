@@ -140,7 +140,7 @@ textarea { width: 100%; resize: vertical; font-size: 13px; }
 .newjob.big .nj-text { min-width: 0; }
 .newjob.big .nj-icon { width: 56px; height: 56px; }
 .home-empty { display: grid; justify-items: center; gap: 14px; text-align: center; padding-top: 18px; }
-.home-logo { width: 112px; height: 112px; border-radius: 26px; box-shadow: 0 10px 30px -12px rgba(9, 13, 44, .55); }
+.home-logo { width: 120px; height: 120px; filter: drop-shadow(0 10px 18px rgba(5, 11, 56, .35)); }
 .home-empty h1 { font-size: 34px; }
 .home-empty .lede { margin-bottom: 10px; }
 .lede { font-size: 17px; color: var(--ink-2); max-width: 62ch; }
