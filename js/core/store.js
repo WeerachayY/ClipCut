@@ -10,7 +10,9 @@ export const PROJECT_VERSION = 2;
 
 export function initialState() {
   return {
-    step: 'start',
+    step: 'home',
+    jobId: null,             // the open job (see core/jobs.js), null on the home screen
+    jobName: '',
     source: null,            // {kind:'folder'|'files', dir?: FileSystemDirectoryHandle, name}
     videos: [],              // [{id,name,size,lastModified,file,url,duration,keyframes,kfSource,codec}]
     transcriptFile: null,    // File
@@ -53,6 +55,8 @@ export function serializeProject(s) {
     app: 'clipcut',
     version: PROJECT_VERSION,
     savedAt: new Date().toISOString(),
+    jobId: s.jobId || null,
+    jobName: s.jobName || '',
     videos: s.videos.map((v) => ({ name: v.name, size: v.size, duration: v.duration })),
     transcript: s.transcript ? { fileName: s.transcript.fileName } : null,
     anchors: s.anchors,

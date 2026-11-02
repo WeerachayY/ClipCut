@@ -1,11 +1,13 @@
 // Local files: open a project folder (File System Access API, Edge/Chrome) or take dropped files.
 // Nothing here talks to the network.
-import { PROJECT_FILE } from '../core/store.js';
+import { isProjectFileName } from '../core/jobs.js';
 
 export const VIDEO_EXT = ['.mp4', '.m4v', '.mov'];
 export const TRANSCRIPT_EXT = ['.docx', '.vtt', '.srt', '.txt'];
 
 export const canOpenFolder = () => typeof window !== 'undefined' && 'showDirectoryPicker' in window;
+/** Edge/Chrome can hand out file handles, so a job made from picked files can be reopened later. */
+export const canPickFiles = () => typeof window !== 'undefined' && 'showOpenFilePicker' in window;
 
 const ext = (name) => { const i = name.lastIndexOf('.'); return i >= 0 ? name.slice(i).toLowerCase() : ''; };
 const collator = new Intl.Collator('th', { numeric: true, sensitivity: 'base' });
@@ -15,7 +17,7 @@ export function classifyFiles(files) {
   const out = { videos: [], transcripts: [], project: null, ignored: [] };
   for (const f of files) {
     const e = ext(f.name);
-    if (f.name === PROJECT_FILE) out.project = f;
+    if (isProjectFileName(f.name)) { if (!out.project || f.name === 'clipcut.project.json') out.project = f; }
     else if (VIDEO_EXT.includes(e)) out.videos.push(f);
     else if (TRANSCRIPT_EXT.includes(e) && !f.name.startsWith('~$')) out.transcripts.push(f);
     else out.ignored.push(f);
@@ -29,39 +31,84 @@ export function classifyFiles(files) {
 
 export async function pickFolder() {
   const dir = await window.showDirectoryPicker({ id: 'clipcut', mode: 'readwrite' });
+  return { dir, files: await listDirFiles(dir) };
+}
+
+/** Files directly inside a folder (not in subfolders such as output/). */
+export async function listDirFiles(dir) {
   const files = [];
   for await (const entry of dir.values()) {
     if (entry.kind === 'file') files.push(await entry.getFile());
   }
-  return { dir, files };
+  return files;
 }
 
-/** Files from a drop event, including files inside dropped folders (one level deep). */
+/** Edge/Chrome file picker: returns the files and their handles (kept with the job). */
+export async function pickFiles() {
+  const handles = await window.showOpenFilePicker({
+    id: 'clipcut-files',
+    multiple: true,
+    types: [{
+      description: 'วิดีโอ, transcript และไฟล์งาน',
+      accept: {
+        'video/mp4': ['.mp4', '.m4v'],
+        'video/quicktime': ['.mov'],
+        'text/plain': ['.txt', '.vtt', '.srt'],
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+        'application/json': ['.json'],
+      },
+    }],
+  });
+  return { handles, files: await Promise.all(handles.map((h) => h.getFile())) };
+}
+
+/** Other browsers: a plain file input. Resolves [] when the user cancels. */
+export function pickFilesWithInput() {
+  return new Promise((resolve) => {
+    const input = Object.assign(document.createElement('input'), { type: 'file', multiple: true, accept: [...VIDEO_EXT, ...TRANSCRIPT_EXT, '.json'].join(',') });
+    input.addEventListener('change', () => resolve([...input.files]));
+    input.addEventListener('cancel', () => resolve([]));
+    input.click();
+  });
+}
+
+/**
+ * Files from a drop event, including files inside a dropped folder (one level deep).
+ * Edge/Chrome also give handles: `dir` when one folder was dropped, `handles` when only files were.
+ */
 export async function filesFromDrop(dataTransfer) {
-  const items = [...(dataTransfer.items || [])];
-  const handles = items.map((it) => (it.getAsFileSystemHandle ? it.getAsFileSystemHandle() : null));
-  const out = [];
-  let dir = null;
-  if (handles.every(Boolean)) {
-    for (const h of await Promise.all(handles)) {
-      if (!h) continue;
-      if (h.kind === 'file') out.push(await h.getFile());
-      else if (h.kind === 'directory') {
-        dir = dir || h;
-        for await (const entry of h.values()) if (entry.kind === 'file') out.push(await entry.getFile());
-      }
+  const items = [...(dataTransfer.items || [])].filter((it) => it.kind === 'file');
+  const pending = items.map((it) => (it.getAsFileSystemHandle ? it.getAsFileSystemHandle() : null));
+  if (pending.length && pending.every(Boolean)) {
+    const handles = (await Promise.all(pending)).filter(Boolean);
+    const out = [];
+    let dir = null;
+    const fileHandles = [];
+    for (const h of handles) {
+      if (h.kind === 'file') { fileHandles.push(h); out.push(await h.getFile()); }
+      else if (h.kind === 'directory') { dir = dir || h; out.push(...await listDirFiles(h)); }
     }
-    return { files: out, dir: handles.length === 1 ? dir : null };
+    if (handles.length === 1 && dir) return { files: out, dir, handles: null };
+    return { files: out, dir: null, handles: dir ? null : fileHandles };
   }
-  return { files: [...dataTransfer.files], dir: null };
+  return { files: [...dataTransfer.files], dir: null, handles: null };
 }
 
-export async function ensureWritable(dir) {
-  if (!dir) return false;
-  const opts = { mode: 'readwrite' };
-  if ((await dir.queryPermission(opts)) === 'granted') return true;
-  return (await dir.requestPermission(opts)) === 'granted';
+/** Make sure we may read (or write) through a saved handle. Asking needs a click, so call it from one. */
+export async function ensurePermission(handle, mode = 'read') {
+  if (!handle) return false;
+  if (!handle.queryPermission) return true;
+  const opts = { mode };
+  if ((await handle.queryPermission(opts)) === 'granted') return true;
+  return (await handle.requestPermission(opts)) === 'granted';
 }
+
+/** True only when write access is already granted; never shows a prompt (for autosave). */
+export async function canWriteNow(dir) {
+  try { return (await dir?.queryPermission?.({ mode: 'readwrite' })) === 'granted'; } catch { return false; }
+}
+
+export const ensureWritable = (dir) => ensurePermission(dir, 'readwrite');
 
 export async function writeFileTo(dir, name, data) {
   const fh = await dir.getFileHandle(name, { create: true });

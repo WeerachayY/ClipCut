@@ -70,7 +70,7 @@ export function mount(root, app) {
       };
       where = null;
     }
-    running = true; results = null; error = null; progress = { message: 'เริ่ม…', ratio: 0, part: 0, parts: plan.parts.length };
+    running = true; app.exporting = true; results = null; error = null; progress = { message: 'เริ่ม…', ratio: 0, part: 0, parts: plan.parts.length };
     render();
     try {
       const res = await runExport({
@@ -86,11 +86,13 @@ export function mount(root, app) {
       await writeOutput(reportName, reportBytes);
       results = { files: [...res, { name: reportName, bytes: reportBytes.byteLength, duration: null }], where };
       toast('ส่งออกเสร็จแล้ว', 'success');
+      app.markExported();
     } catch (e) {
       console.error(e);
       error = running ? e.message : 'ยกเลิกแล้ว';
     } finally {
       running = false;
+      app.exporting = false;
       progress = null;
       render();
     }

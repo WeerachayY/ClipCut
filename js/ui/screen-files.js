@@ -77,7 +77,7 @@ export function mount(root, app) {
         detectorSettingsForm(app)),
 
       h('div.next-bar',
-        h('button.ghost', { type: 'button', onclick: () => app.go('start') }, icon('arrowLeft', 16), 'เปิดโฟลเดอร์อื่น'),
+        h('button.ghost', { type: 'button', onclick: () => app.goHome() }, icon('arrowLeft', 16), 'งานทั้งหมด'),
         h('div.next-right',
           s.edit.marks.length ? h('button.secondary', { type: 'button', onclick: () => app.go('review') }, 'กลับไปตรวจจุดตัดเดิม') : null,
           h('button.primary', { type: 'button', disabled: !s.videos.every((v) => v.duration), onclick: () => app.analyze() }, 'หาจุดตัด', icon('arrowRight', 16)))));
