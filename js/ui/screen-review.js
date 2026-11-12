@@ -3,18 +3,19 @@ import { h, clear, icon, toast, ask } from './dom.js';
 import { MultiPlayer } from './player.js';
 import { TimelineView } from './timeline-view.js';
 import { FrameSource } from '../media/frames.js';
-import { formatTime, formatDuration, formatTimecode } from '../core/time.js';
+import { formatTime, formatDuration, formatTimecode, formatClockMs } from '../core/time.js';
 import { buildPlan } from '../core/plan.js';
 import * as C from '../core/cuts.js';
 import { mapLines, proposeAnchors } from '../core/analysis.js';
-import { lineSpans, lineStates, rangeOfLines, quietestNear } from '../core/textedit.js';
+import { lineSpans, lineStates, rangeOfLines, quietestNear, nextSoundEdge } from '../core/textedit.js';
 import { newId } from '../core/store.js';
 
 const BADGE = { delete: 'ทิ้ง', high: 'แนะนำให้ทิ้ง', check: 'ควรเช็ค', rejected: 'เก็บไว้' };
 // [keys, what it does, how CapCut does it (true = same)]
 const SHORTCUTS = [
   ['Space', 'เล่น / หยุด', true],
-  ['← / →', 'ถอย / ไปข้างหน้า 1 เฟรม', true],
+  ['← / →', 'ถอย / ไปข้างหน้า 1 ขั้น (เฟรมภาพ, 10 ms หรือ 1 ms ตามที่เลือกข้างเวลา)', 'CapCut เดินทีละเฟรม'],
+  ['1 / 2', 'ไปขอบเสียงก่อนหน้า / ถัดไป (จุดที่เสียงเริ่มหรือหยุด)', null],
   ['Shift + ← / Shift + →', 'ถอย / ไปข้างหน้า 1 วินาที', 'CapCut ขยับ 5 เฟรม'],
   ['Ctrl + ← / Ctrl + →', 'ถอย / ไปข้างหน้า 10 วินาที', null],
   ['Home / End', 'ไปต้น / ท้ายวิดีโอ', true],
@@ -29,7 +30,7 @@ const SHORTCUTS = [
   ['Ctrl + Shift + Z / Ctrl + Y', 'ทำซ้ำ', true],
   ['Ctrl + = / Ctrl + -', 'ซูม timeline เข้า / ออก (หรือ Ctrl + ล้อเมาส์)', true],
   ['Ctrl + 0', 'timeline พอดีจอ', true],
-  [', / .', 'ขยับจุดตัดที่เลือก 1 เฟรม', null],
+  [', / .', 'ขยับจุดตัดที่เลือก 1 ขั้น', null],
   ['Shift + , / Shift + .', 'ขยับจุดตัดที่เลือก 1 วินาที', null],
   ['A / R', 'ทิ้ง / เก็บ ชิ้นที่เลือก', null],
   ['S', 'แยกเป็นไฟล์ใหม่ที่จุดตัด', null],
@@ -54,10 +55,24 @@ export function mount(root, app) {
   let proposals = null;
 
   // ---------- player + transport ----------
+  const audioOnly = tl.kind === 'audio';
+  const media = audioOnly ? 'เสียง' : 'วิดีโอ';
+  // step of ← → and of cut-point nudges: picture frames, or milliseconds when the sound decides the cut
+  const UNITS = [
+    ...(audioOnly ? [] : [{ id: 'frame', label: 'เฟรมภาพ', name: '1 เฟรม' }]),
+    { id: '10ms', label: '10 ms', name: '10 ms', size: 0.01 },
+    { id: '1ms', label: '1 ms', name: '1 ms', size: 0.001 },
+  ];
+  const UNIT_PREF = `clipcut.step.${tl.kind}`;
+  let unit = UNITS[0];
+  try { unit = UNITS.find((u) => u.id === localStorage.getItem(UNIT_PREF)) || unit; } catch { /* private mode */ }
   const video = h('video.player', { playsinline: true, preload: 'auto' });
   const player = new MultiPlayer(video);
   const fileTag = h('span.file-tag');
   const timeLabel = h('span.time-now', '0:00:00:00');
+  const totalLabel = h('span.time-total');
+  const unitSel = h('select.unit', { 'aria-label': 'ขั้นของการเลื่อน', 'data-tip': 'ขั้นของปุ่ม ← → และการขยับจุดตัด', onchange: (e) => setUnit(e.target.value) },
+    UNITS.map((u) => h('option', { value: u.id, selected: u === unit }, `ทีละ ${u.label}`)));
   const playBtn = h('button.primary.icon-only.play', { type: 'button', onclick: () => player.toggle(), 'aria-label': 'เล่น/หยุด', 'data-tip': 'เล่น / หยุด · Space' }, icon('play', 20));
   const skipBox = h('input', { type: 'checkbox', onchange: (e) => { player.skipRanges = e.target.checked ? skipRanges : null; } });
   const rateSel = h('select', { 'aria-label': 'ความเร็ว', onchange: (e) => player.setRate(Number(e.target.value)) },
@@ -69,20 +84,25 @@ export function mount(root, app) {
   const undoBtn = h('button.tp-btn', { type: 'button', onclick: () => app.undo(), 'aria-label': 'ย้อนกลับ', 'data-tip': 'ย้อนกลับ · Ctrl Z' }, icon('undo', 18));
   const redoBtn = h('button.tp-btn', { type: 'button', onclick: () => app.redo(), 'aria-label': 'ทำซ้ำ', 'data-tip': 'ทำซ้ำ · Ctrl Shift Z' }, icon('redo', 18));
 
+  const stepL = tbtn('chev1L', '', () => step(-1));
+  const stepR = tbtn('chev1R', '', () => step(1));
   const transport = h('div.transport',
     h('div.tp-group.tp-nav',
-      tbtn('toStart', 'ไปต้นวิดีโอ · Home', () => player.seek(0)),
+      tbtn('toStart', `ไปต้น${media} · Home`, () => player.seek(0)),
       tbtn('chev3L', `ถอย ${BIG} วินาที · Ctrl ←`, () => player.jump(-BIG)),
       tbtn('chev2L', 'ถอย 1 วินาที · Shift ←', () => player.jump(-1)),
-      tbtn('chev1L', 'ถอย 1 เฟรม · ←', () => player.stepFrames(-1)),
+      stepL,
       playBtn,
-      tbtn('chev1R', 'ไปข้างหน้า 1 เฟรม · →', () => player.stepFrames(1)),
+      stepR,
       tbtn('chev2R', 'ไปข้างหน้า 1 วินาที · Shift →', () => player.jump(1)),
       tbtn('chev3R', `ไปข้างหน้า ${BIG} วินาที · Ctrl →`, () => player.jump(BIG)),
-      tbtn('toEnd', 'ไปท้ายวิดีโอ · End', () => player.seek(tl.duration)),
-      h('span.time', timeLabel, h('span.time-total', ` / ${formatTimecode(tl.duration, tl.fps)}`)),
-      h('span.fps', { 'data-tip': 'อัตราเฟรมของวิดีโอ ปุ่ม ← → เดินทีละเฟรมตามนี้' }, `${tl.fps} fps`)),
+      tbtn('toEnd', `ไปท้าย${media} · End`, () => player.seek(tl.duration)),
+      h('span.time', timeLabel, totalLabel),
+      unitSel,
+      audioOnly ? null : h('span.fps', { 'data-tip': 'อัตราเฟรมของวิดีโอ' }, `${tl.fps} fps`)),
     h('div.tp-group',
+      tbtn('edgeL', 'ไปขอบเสียงก่อนหน้า (จุดที่เสียงเริ่มหรือหยุด) · 1', () => gotoEdge(-1)),
+      tbtn('edgeR', 'ไปขอบเสียงถัดไป (จุดที่เสียงเริ่มหรือหยุด) · 2', () => gotoEdge(1)),
       h('button.secondary.mark-btn', { type: 'button', onclick: () => markHere(), 'data-tip': 'ผ่าที่ตำแหน่งเล่น · C หรือ Ctrl B' }, icon('scissors', 17), 'มาร์กจุดตัด', h('kbd', 'C')),
       undoBtn, redoBtn,
       rateSel),
@@ -113,7 +133,7 @@ export function mount(root, app) {
     h('button.primary', { type: 'button', onclick: () => app.go('export') }, 'ไปขั้นส่งออก', icon('arrowRight', 16)));
 
   root.append(h('section.review',
-    h('div.rv-main', h('div.player-wrap', video, fileTag), transport, timelineView.el),
+    h('div.rv-main', h(`div.player-wrap${audioOnly ? '.audio' : ''}`, video, audioOnly ? h('div.audio-card', icon('music', 22), h('span', tl.files.map((f) => f.name).join(' + '))) : null, fileTag), transport, timelineView.el),
     side), nextBar);
 
   // ---------- helpers ----------
@@ -143,14 +163,48 @@ export function mount(root, app) {
   }
 
   const fps = () => tl.fps || 30;
-  const tc = (t) => formatTimecode(t, fps(), { short: tl.duration < 3600 });
-  /** cut points always sit on a frame boundary */
-  const frameAt = (t) => Math.round(t * fps()) / fps();
+  const isFrames = () => unit.id === 'frame';
+  /** one press of ← → */
+  const stepSize = () => (isFrames() ? 1 / fps() : unit.size);
+  /** cut points sit on a frame boundary, or on a millisecond when working by sound */
+  const grid = () => (isFrames() ? 1 / fps() : 0.001);
+  const fmt = (t, short) => (isFrames() ? formatTimecode(t, fps(), { short }) : formatClockMs(t, { short }));
+  const tc = (t) => fmt(t, tl.duration < 3600);
+  const frameAt = (t) => Math.round(t / grid()) * grid();
+  const step = (n) => player.step(n, stepSize(), isFrames() ? 0.25 / fps() : 0);
+
+  function setUnit(id) {
+    unit = UNITS.find((u) => u.id === id) || UNITS[0];
+    try { localStorage.setItem(UNIT_PREF, unit.id); } catch { /* private mode */ }
+    applyUnit();
+    renderTimeline();
+    if (sideView === 'pieces') renderSide();
+  }
+  function applyUnit() {
+    stepL.dataset.tip = `ถอย ${unit.name} · ←`;
+    stepR.dataset.tip = `ไปข้างหน้า ${unit.name} · →`;
+    stepL.setAttribute('aria-label', `ถอย ${unit.name}`);
+    stepR.setAttribute('aria-label', `ไปข้างหน้า ${unit.name}`);
+    totalLabel.textContent = ` / ${fmt(tl.duration, false)}`;
+    timeLabel.textContent = fmt(player.time, false);
+    timelineView.setUnit({ format: fmt, grid: grid() });
+  }
+
+  /** Jump to where sound starts or stops (needs the waveform). */
+  function gotoEdge(dir) {
+    const wf = app.validLayers().waveform;
+    if (!wf) { toast('ยังไม่มีคลื่นเสียง รอให้วัดเสียงเสร็จก่อน'); return; }
+    const e = nextSoundEdge(wf, player.time, dir);
+    if (!e) { toast(dir > 0 ? 'ไม่มีขอบเสียงถัดไปแล้ว' : 'ไม่มีขอบเสียงก่อนหน้าแล้ว'); return; }
+    player.pause();
+    player.seek(e.t);
+    toast(e.kind === 'on' ? 'เสียงเริ่ม' : 'เสียงหยุด', 'info', 900);
+  }
 
   function markHere({ split = false } = {}) {
     const t = frameAt(player.time);
     const r = C.addMark(s().edit, t, D(), { split, label: split ? `ตอนที่ ${C.toPlanInput(s().edit, D()).splits.length + 2}` : '' });
-    if (!r.id) { toast('ตรงนี้อยู่ต้นหรือท้ายวิดีโอ ไม่ต้องมาร์ก'); return; }
+    if (!r.id) { toast(`ตรงนี้อยู่ต้นหรือท้าย${media} ไม่ต้องมาร์ก`); return; }
     app.commitEdit(r.edit, { selection: { type: 'mark', id: r.id } });
   }
 
@@ -172,7 +226,7 @@ export function mount(root, app) {
   function gotoMark(dir) {
     const t = player.time;
     const list = marks();
-    const m = dir < 0 ? [...list].reverse().find((x) => x.at < t - 0.5 / fps()) : list.find((x) => x.at > t + 0.5 / fps());
+    const m = dir < 0 ? [...list].reverse().find((x) => x.at < t - 0.5 * grid()) : list.find((x) => x.at > t + 0.5 * grid());
     if (!m) { player.seek(dir < 0 ? 0 : D()); return; }
     player.seek(m.at);
     select({ type: 'mark', id: m.id });
@@ -207,8 +261,8 @@ export function mount(root, app) {
       if (cmd === 'split') edit((e) => C.setSplit(e, m.id, !m.split, m.label || `ตอนที่ ${C.toPlanInput(e, D()).splits.length + 2}`));
       if (cmd === 'preview') player.previewSeam(m.at, m.at, { before: seam, after: seam });
       if (cmd === 'here') edit((e) => C.moveMark(e, m.id, frameAt(player.time), D()));
-      if (cmd === 'nudge-frame-') edit((e) => C.nudgeMark(e, m.id, -1 / fps(), D()));
-      if (cmd === 'nudge-frame+') edit((e) => C.nudgeMark(e, m.id, 1 / fps(), D()));
+      if (cmd === 'nudge-frame-') edit((e) => C.nudgeMark(e, m.id, -stepSize(), D()));
+      if (cmd === 'nudge-frame+') edit((e) => C.nudgeMark(e, m.id, stepSize(), D()));
       if (cmd === 'nudge-sec-') edit((e) => C.nudgeMark(e, m.id, -1, D()));
       if (cmd === 'nudge-sec+') edit((e) => C.nudgeMark(e, m.id, 1, D()));
     }
@@ -249,8 +303,8 @@ export function mount(root, app) {
         h('button.small.secondary', { type: 'button', onclick: () => act('split'), 'data-tip': 'ส่งออกเป็นไฟล์ใหม่ตั้งแต่จุดนี้ · S' }, icon('split', 15), m.split ? 'ยกเลิกแยกไฟล์' : 'แยกเป็นไฟล์ใหม่ตรงนี้'),
         h('span.tb-sep'),
         h('button.tp-btn.sm', { type: 'button', onclick: () => act('nudge-sec-'), 'data-tip': 'ขยับซ้าย 1 วินาที · Shift ,' }, icon('chev2L', 15)),
-        h('button.tp-btn.sm', { type: 'button', onclick: () => act('nudge-frame-'), 'data-tip': 'ขยับซ้าย 1 เฟรม · ,' }, icon('chev1L', 15)),
-        h('button.tp-btn.sm', { type: 'button', onclick: () => act('nudge-frame+'), 'data-tip': 'ขยับขวา 1 เฟรม · .' }, icon('chev1R', 15)),
+        h('button.tp-btn.sm', { type: 'button', onclick: () => act('nudge-frame-'), 'data-tip': `ขยับซ้าย ${unit.name} · ,` }, icon('chev1L', 15)),
+        h('button.tp-btn.sm', { type: 'button', onclick: () => act('nudge-frame+'), 'data-tip': `ขยับขวา ${unit.name} · .` }, icon('chev1R', 15)),
         h('button.tp-btn.sm', { type: 'button', onclick: () => act('nudge-sec+'), 'data-tip': 'ขยับขวา 1 วินาที · Shift .' }, icon('chev2R', 15)),
         h('span.tb-sep'),
         h('button.small.ghost', { type: 'button', onclick: () => act('preview'), 'data-tip': 'ฟังรอบจุดนี้ · P' }, icon('ear', 15), 'ฟัง')),
@@ -261,13 +315,13 @@ export function mount(root, app) {
   function edgeCtl(p, which) {
     const m = which === 'start' ? p.leftMark : p.rightMark;
     const label = which === 'start' ? 'จุดเริ่ม' : 'จุดจบ';
-    if (!m) return h('div.edge', h('span.edge-label', label), h('span.hint', which === 'start' ? 'ต้นวิดีโอ' : 'ท้ายวิดีโอ'));
+    if (!m) return h('div.edge', h('span.edge-label', label), h('span.hint', which === 'start' ? `ต้น${media}` : `ท้าย${media}`));
     return h('div.edge',
       h('span.edge-label', label),
       h('button.tp-btn.sm', { type: 'button', onclick: () => edit((e) => C.nudgeMark(e, m.id, -1, D())), 'data-tip': 'ขยับ −1 วินาที' }, icon('chev2L', 14)),
-      h('button.tp-btn.sm', { type: 'button', onclick: () => edit((e) => C.nudgeMark(e, m.id, -1 / fps(), D())), 'data-tip': 'ขยับ −1 เฟรม' }, icon('chev1L', 14)),
+      h('button.tp-btn.sm', { type: 'button', onclick: () => edit((e) => C.nudgeMark(e, m.id, -stepSize(), D())), 'data-tip': `ขยับ −${unit.name}` }, icon('chev1L', 14)),
       h('button.ghost.small.tc', { type: 'button', onclick: () => player.seek(m.at), 'data-tip': 'ไปที่จุดนี้' }, tc(m.at)),
-      h('button.tp-btn.sm', { type: 'button', onclick: () => edit((e) => C.nudgeMark(e, m.id, 1 / fps(), D())), 'data-tip': 'ขยับ +1 เฟรม' }, icon('chev1R', 14)),
+      h('button.tp-btn.sm', { type: 'button', onclick: () => edit((e) => C.nudgeMark(e, m.id, stepSize(), D())), 'data-tip': `ขยับ +${unit.name}` }, icon('chev1R', 14)),
       h('button.tp-btn.sm', { type: 'button', onclick: () => edit((e) => C.nudgeMark(e, m.id, 1, D())), 'data-tip': 'ขยับ +1 วินาที' }, icon('chev2R', 14)),
       h('button.tp-btn.sm', { type: 'button', onclick: () => edit((e) => C.moveMark(e, m.id, frameAt(player.time), D())), 'data-tip': `ย้ายมาที่ตำแหน่งเล่น · ${which === 'start' ? '[' : ']'}`, 'aria-label': `ย้าย${label}มาที่ตำแหน่งเล่น` }, icon('target', 15)),
       h('button.ghost.small', { type: 'button', onclick: () => { select({ type: 'mark', id: m.id }); act('join'); }, 'data-tip': 'ลบจุดตัดนี้ ชิ้นสองข้างรวมกันและถูกเก็บไว้' }, 'ต่อกลับ'));
@@ -316,7 +370,7 @@ export function mount(root, app) {
         : h('div.empty-how',
           h('p', h('strong', 'ยังไม่มีชิ้นที่จะทิ้ง')),
           h('ol',
-            h('li', 'เล่นวิดีโอไปถึงจุดที่จะผ่า แล้วกด “มาร์กจุดตัด” (C)'),
+            h('li', `เล่น${media}ไปถึงจุดที่จะผ่า แล้วกด “มาร์กจุดตัด” (C)`),
             h('li', 'ผ่าอีกจุดที่ปลายช่วงที่ไม่ต้องการ'),
             h('li', 'คลิกชิ้นตรงกลางบน timeline แล้วกด “ทิ้งชิ้นนี้”'))),
       h('h3', 'แยกเป็นหลายไฟล์'),
@@ -494,7 +548,7 @@ export function mount(root, app) {
 
   // ---------- time updates ----------
   function onTime(t) {
-    timeLabel.textContent = formatTimecode(t, fps());
+    timeLabel.textContent = fmt(t, false);
     timelineView.setTime(t);
     if (sideView === 'sync' && lineEls.length) {
       let lo = 0; let hi = lines.length - 1; let idx = -1;
@@ -543,7 +597,7 @@ export function mount(root, app) {
       if (alt) return; // Alt+arrow is the browser's back/forward
       done();
       const dir = k === 'ArrowLeft' ? -1 : 1;
-      if (ctrl) player.jump(dir * BIG); else if (shift) player.jump(dir); else player.stepFrames(dir);
+      if (ctrl) player.jump(dir * BIG); else if (shift) player.jump(dir); else step(dir);
       return;
     }
     if (k === 'ArrowUp' || k === 'ArrowDown') { done(); const dir = k === 'ArrowUp' ? -1 : 1; if (shift) nav(dir); else gotoMark(dir); return; }
@@ -553,6 +607,8 @@ export function mount(root, app) {
     if (k === 'Home') { done(); player.seek(0); return; }
     if (k === 'End') { done(); player.seek(D()); return; }
     if (lower === 'c' || lower === 'b') { done(); markHere(); return; }
+    if (k === '1') { done(); gotoEdge(-1); return; }
+    if (k === '2') { done(); gotoEdge(1); return; }
     if (lower === 'q') { done(); trim('left'); return; }
     if (lower === 'w') { done(); trim('right'); return; }
     if (lower === 'k') { done(); player.pause(); setRate(1); return; }
@@ -576,7 +632,8 @@ export function mount(root, app) {
   window.addEventListener('resize', onResize);
 
   // ---------- media for the lanes (stills, waveform) ----------
-  const frames = new FrameSource({ timeline: tl, videos: s().videos });
+  const frames = audioOnly ? null : new FrameSource({ timeline: tl, videos: s().videos });
+  applyUnit();
   let lastMedia = null;
   const syncMedia = (st) => {
     const sig = [st.layers, st.layerProgress, st.analysis];
@@ -623,7 +680,7 @@ export function mount(root, app) {
   return () => {
     unsub();
     timelineView.dispose();
-    frames.dispose();
+    frames?.dispose();
     document.removeEventListener('keydown', onKey);
     window.removeEventListener('resize', onResize);
     player.pause();

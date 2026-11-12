@@ -3,6 +3,9 @@
 import { isProjectFileName } from '../core/jobs.js';
 
 export const VIDEO_EXT = ['.mp4', '.m4v', '.mov'];
+export const AUDIO_EXT = ['.mp3', '.m4a', '.wav'];
+export const MEDIA_EXT = [...VIDEO_EXT, ...AUDIO_EXT];
+export const mediaKind = (name) => (AUDIO_EXT.includes(ext(name)) ? 'audio' : 'video');
 export const TRANSCRIPT_EXT = ['.docx', '.vtt', '.srt', '.txt'];
 
 export const canOpenFolder = () => typeof window !== 'undefined' && 'showDirectoryPicker' in window;
@@ -12,16 +15,23 @@ export const canPickFiles = () => typeof window !== 'undefined' && 'showOpenFile
 const ext = (name) => { const i = name.lastIndexOf('.'); return i >= 0 ? name.slice(i).toLowerCase() : ''; };
 const collator = new Intl.Collator('th', { numeric: true, sensitivity: 'base' });
 
-/** Sort, then split a flat list of files into videos / transcript candidates / project / ignored. */
+/**
+ * Sort, then split a flat list of files into media / transcript candidates / project / ignored.
+ * `videos` holds the job's media: the videos, or the audio files when there is no video at all
+ * (audio next to a video is ignored: one job is either video or audio).
+ */
 export function classifyFiles(files) {
   const out = { videos: [], transcripts: [], project: null, ignored: [] };
+  const audios = [];
   for (const f of files) {
     const e = ext(f.name);
     if (isProjectFileName(f.name)) { if (!out.project || f.name === 'clipcut.project.json') out.project = f; }
     else if (VIDEO_EXT.includes(e)) out.videos.push(f);
+    else if (AUDIO_EXT.includes(e)) audios.push(f);
     else if (TRANSCRIPT_EXT.includes(e) && !f.name.startsWith('~$')) out.transcripts.push(f);
     else out.ignored.push(f);
   }
+  if (out.videos.length) out.ignored.push(...audios); else out.videos = audios;
   out.videos.sort((a, b) => collator.compare(a.name, b.name));
   // Prefer a file that says "transcript", then Word files, then newest.
   const score = (f) => (/transcript|ถอดความ|บันทึก/i.test(f.name) ? 4 : 0) + (ext(f.name) === '.docx' ? 2 : ext(f.name) === '.vtt' ? 1 : 0);
@@ -49,8 +59,11 @@ export async function pickFiles() {
     id: 'clipcut-files',
     multiple: true,
     types: [{
-      description: 'วิดีโอ, transcript และไฟล์งาน',
+      description: 'วิดีโอ, เสียง, transcript และไฟล์งาน',
       accept: {
+        'audio/mpeg': ['.mp3'],
+        'audio/mp4': ['.m4a'],
+        'audio/wav': ['.wav'],
         'video/mp4': ['.mp4', '.m4v'],
         'video/quicktime': ['.mov'],
         'text/plain': ['.txt', '.vtt', '.srt'],
@@ -65,7 +78,7 @@ export async function pickFiles() {
 /** Other browsers: a plain file input. Resolves [] when the user cancels. */
 export function pickFilesWithInput() {
   return new Promise((resolve) => {
-    const input = Object.assign(document.createElement('input'), { type: 'file', multiple: true, accept: [...VIDEO_EXT, ...TRANSCRIPT_EXT, '.json'].join(',') });
+    const input = Object.assign(document.createElement('input'), { type: 'file', multiple: true, accept: [...MEDIA_EXT, ...TRANSCRIPT_EXT, '.json'].join(',') });
     input.addEventListener('change', () => resolve([...input.files]));
     input.addEventListener('cancel', () => resolve([]));
     input.click();

@@ -85,21 +85,7 @@ export function buildPlan(timeline, cuts, splits = [], { snap = true, minPart = 
     const ranges = keep
       .map((r) => ({ start: Math.max(r.start, p0), end: Math.min(r.end, p1) }))
       .filter((r) => r.end - r.start > EPS);
-    const segments = [];
-    for (const r of ranges) {
-      for (const piece of timeline.splitRange(r.start, r.end)) {
-        const atFileEnd = piece.outpoint >= piece.file.duration - 0.01;
-        segments.push({
-          fileIndex: piece.index,
-          fileId: piece.file.id,
-          fileName: piece.file.name,
-          inpoint: piece.inpoint,
-          outpoint: atFileEnd ? null : piece.outpoint,
-          duration: piece.outpoint - piece.inpoint,
-          globalStart: piece.file.start + piece.inpoint,
-        });
-      }
-    }
+    const segments = segmentsOf(timeline, ranges);
     const duration = segments.reduce((acc, s) => acc + s.duration, 0);
     const label = k === 0 ? (snappedSplits.length ? 'เริ่มต้น' : '') : snappedSplits[k - 1].label;
     if (duration < minPart) {
@@ -119,6 +105,82 @@ export function buildPlan(timeline, cuts, splits = [], { snap = true, minPart = 
     removedDuration: removed.reduce((a, r) => a + (r.end - r.start), 0),
     totalDuration: D,
     snapped: snap && timeline.hasKeyframes,
+    warnings,
+  };
+}
+
+/** Per-file segments (local in/out points) for global ranges, in the order given. */
+export function segmentsOf(timeline, ranges) {
+  const segments = [];
+  for (const r of ranges) {
+    for (const piece of timeline.splitRange(r.start, r.end)) {
+      const atFileEnd = piece.outpoint >= piece.file.duration - 0.01;
+      segments.push({
+        fileIndex: piece.index,
+        fileId: piece.file.id,
+        fileName: piece.file.name,
+        inpoint: piece.inpoint,
+        outpoint: atFileEnd ? null : piece.outpoint,
+        duration: piece.outpoint - piece.inpoint,
+        globalStart: piece.file.start + piece.inpoint,
+      });
+    }
+  }
+  return segments;
+}
+
+/**
+ * Plan for "pick and arrange pieces": the chosen clips in the chosen order, either each as its own
+ * file or joined into one. Same shape as buildPlan's result, so export and side files work unchanged.
+ * @param {{start:number,end:number,name?:string,key?:string}[]} clips  in output order
+ * @param {{snap?:boolean, joined?:boolean, minPart?:number}} opts
+ */
+export function buildClipPlan(timeline, clips, { snap = true, joined = false, minPart = 0.1 } = {}) {
+  const D = timeline.duration;
+  const warnings = [];
+  const usable = clips
+    .map((c) => ({ ...c, start: Math.max(0, c.start), end: Math.min(D, c.end) }))
+    .filter((c) => c.end - c.start >= minPart);
+
+  // neighbours that are also neighbours in the source play straight through: one range, no snapping in between
+  const runs = [];
+  for (const c of usable) {
+    const last = runs[runs.length - 1];
+    if (joined && last && Math.abs(last.end - c.start) < 0.002) last.end = c.end;
+    else runs.push({ start: c.start, end: c.end, name: c.name || '', key: c.key });
+  }
+  const ranges = [];
+  for (const r of runs) {
+    const start = snap ? timeline.snapDown(r.start) : r.start;
+    if (r.end - start < EPS * 2) { warnings.push({ type: 'ineffective-clip', message: `“${r.name || 'ชิ้น'}” สั้นเกินไป จึงข้ามไป` }); continue; }
+    ranges.push({ ...r, start, requested: r.start });
+  }
+
+  const mk = (index, label, rs) => {
+    const segments = segmentsOf(timeline, rs);
+    return {
+      index, label, ranges: rs, segments,
+      from: Math.min(...rs.map((r) => r.start)), to: Math.max(...rs.map((r) => r.end)),
+      duration: segments.reduce((a, s) => a + s.duration, 0),
+    };
+  };
+  const parts = !ranges.length ? [] : joined ? [mk(0, '', ranges)] : ranges.map((r, i) => mk(i, r.name, [r]));
+
+  const keep = mergeRanges(ranges);
+  const removed = [];
+  let cursor = 0;
+  for (const r of keep) {
+    if (r.start - cursor > EPS) removed.push({ start: cursor, end: r.start });
+    cursor = Math.max(cursor, r.end);
+  }
+  if (D - cursor > EPS) removed.push({ start: cursor, end: D });
+  return {
+    parts, removed, keep, splits: [],
+    keptDuration: parts.reduce((a, p) => a + p.duration, 0),
+    removedDuration: removed.reduce((a, r) => a + (r.end - r.start), 0),
+    totalDuration: D,
+    snapped: snap && timeline.hasKeyframes,
+    arranged: true,
     warnings,
   };
 }

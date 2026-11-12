@@ -1,9 +1,23 @@
 // Audio track: the loudness envelope from the 'waveform' media layer, mirrored around the middle like CapCut.
+const lows = new WeakMap();
+function coarse(layer) {
+  let lo = lows.get(layer.peaks);
+  if (!lo) {
+    const step = Math.max(1, Math.round(layer.rate / 100));
+    const peaks = new Uint8Array(Math.ceil(layer.peaks.length / step));
+    for (let i = 0; i < layer.peaks.length; i++) { const k = (i / step) | 0; if (layer.peaks[i] > peaks[k]) peaks[k] = layer.peaks[i]; }
+    lo = { rate: layer.rate / step, peaks };
+    lows.set(layer.peaks, lo);
+  }
+  return lo;
+}
+
 export default {
   id: 'waveform',
   label: 'เสียง',
   order: 20,
   height: 40,
+  audioHeight: 96, // taller when it is the only lane (audio files)
   enabledByDefault: true,
   layer: 'waveform',
   draw(view) {
@@ -19,7 +33,9 @@ export default {
       g.fillText(msg, 8, mid);
       return;
     }
-    const { rate, peaks } = layer;
+    // far zoomed out, read a 100-per-second copy (max of each 10 ms) so drawing stays fast on long recordings
+    const fine = view.pxPerSec * 20 >= layer.rate;
+    const { rate, peaks } = fine ? layer : coarse(layer);
     const half = mid - 2;
     g.fillStyle = colors.wave;
     const perPx = rate / view.pxPerSec; // envelope values per pixel

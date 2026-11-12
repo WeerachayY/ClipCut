@@ -1,17 +1,33 @@
 import { h, clear, icon, toast } from './dom.js';
-import { exportProfiles, getExportProfile, exportExtras } from '../core/registry.js';
+import { exportProfiles, exportExtras } from '../core/registry.js';
 import { mapLines } from '../core/analysis.js';
 import { lineSpans } from '../core/textedit.js';
-import { buildPlan, estimatePartBytes } from '../core/plan.js';
-import { counts } from '../core/cuts.js';
-import { formatTime, formatBytes } from '../core/time.js';
-import { runExport, partFileName, safeName, MAX_OUTPUT_BYTES } from '../media/export.js';
+import { buildPlan, buildClipPlan, estimatePartBytes } from '../core/plan.js';
+import { counts, piecesOf, toPlanInput } from '../core/cuts.js';
+import { emptyArrange, clipList, moveClip, setClipOn, setClipName, resetOrder, isReordered } from '../core/arrange.js';
+import { formatTime, formatBytes, formatDuration, formatClockMs } from '../core/time.js';
+import { runExport, partFileName, safeName, outputExtension, profilesFor, MAX_OUTPUT_BYTES } from '../media/export.js';
 import { ffmpeg } from '../media/ffmpeg.js';
 import { ensureWritable, outputDir, writeFileTo } from '../io/folder.js';
 
 function defaultBase(videos) {
   const n = videos[0]?.name || 'video';
   return `${n.replace(/\.[^.]+$/, '')}_ตัดแล้ว`;
+}
+
+const MIME = { mp4: 'video/mp4', mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', txt: 'text/plain', srt: 'application/x-subrip' };
+
+/** The export profile in use (one that fits this job: video or audio) and what will be made with it. */
+function current(st, tl) {
+  const profs = profilesFor(exportProfiles(), tl);
+  const profile = profs.find((p) => p.id === st.exportProfile) || profs[0];
+  const snap = profile.snapToKeyframes !== false;
+  const arrange = { ...emptyArrange(), ...(st.arrange || {}) };
+  const clips = clipList(arrange, piecesOf(st.edit, tl.duration));
+  let plan;
+  if (arrange.mode === 'clips') plan = buildClipPlan(tl, clips.filter((c) => c.on), { snap, joined: arrange.output === 'joined' });
+  else { const { cuts, splits } = toPlanInput(st.edit, tl.duration); plan = buildPlan(tl, cuts, splits, { snap }); }
+  return { profs, profile, plan, arrange, clips, ext: outputExtension(profile, tl) };
 }
 
 /** Side files (captions, report…): which are on, with their options. */
@@ -46,9 +62,7 @@ export function mount(root, app) {
   async function start() {
     const st = store.get();
     const tl = app.timeline();
-    const profile = getExportProfile(st.exportProfile) || exportProfiles()[0];
-    const { cuts, splits } = app.planInput();
-    const plan = buildPlan(tl, cuts, splits, { snap: profile.snapToKeyframes !== false });
+    const { profile, plan } = current(st, tl);
     const base = st.outputBase || defaultBase(st.videos);
     let writeOutput;
     let where;
@@ -62,7 +76,7 @@ export function mount(root, app) {
       blobUrls.forEach((u) => URL.revokeObjectURL(u.url));
       blobUrls = [];
       writeOutput = async (name, data) => {
-        const type = name.endsWith('.txt') ? 'text/plain' : 'video/mp4';
+        const type = MIME[name.split('.').pop().toLowerCase()] || 'application/octet-stream';
         blobUrls.push({ name, url: URL.createObjectURL(new Blob([data], { type })) });
       };
       where = null;
@@ -128,7 +142,7 @@ export function mount(root, app) {
   }
 
   function extrasForm(st, tl, plan, base, profile) {
-    const names = plan.parts.map((p) => partFileName(base, p, plan.parts.length, profile.outputExtension));
+    const names = plan.parts.map((p) => partFileName(base, p, plan.parts.length, outputExtension(profile, tl)));
     const list = extrasState(st, extrasContext(st, tl, plan, base, names));
     if (!list.length) return null;
     return h('fieldset.extras', h('legend', 'ไฟล์ที่ได้เพิ่ม'),
@@ -141,21 +155,78 @@ export function mount(root, app) {
           : null))) : null)));
   }
 
+  function setArrange(patch) { store.set({ arrange: { ...emptyArrange(), ...(store.get().arrange || {}), ...patch } }); }
+  const changeArrange = (fn) => store.set({ arrange: fn({ ...emptyArrange(), ...(store.get().arrange || {}) }) });
+  let dragKey = null;
+
+  /** The pieces as a list: tick the ones to export, name them, drag to reorder. */
+  function clipsPanel(arrange, clips, tl) {
+    const ps = () => piecesOf(store.get().edit, tl.duration);
+    const clock = (t) => (tl.kind === 'audio' ? formatClockMs(t, { short: tl.duration < 3600 }) : formatTime(t, { decimals: 1, short: tl.duration < 3600 }));
+    const joined = arrange.output === 'joined';
+    const row = (c, i) => h(`li.clip${c.on ? '' : '.off'}`, {
+      draggable: !running, dataset: { key: c.key },
+      ondragstart: (e) => { dragKey = c.key; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', c.key); e.currentTarget.classList.add('dragging'); },
+      ondragend: (e) => { dragKey = null; e.currentTarget.classList.remove('dragging'); body.querySelectorAll('.clip').forEach((el) => el.classList.remove('over-top', 'over-bottom')); },
+      ondragover: (e) => {
+        if (!dragKey || dragKey === c.key) return;
+        e.preventDefault();
+        const r = e.currentTarget.getBoundingClientRect();
+        const below = e.clientY > r.top + r.height / 2;
+        e.currentTarget.classList.toggle('over-top', !below);
+        e.currentTarget.classList.toggle('over-bottom', below);
+      },
+      ondragleave: (e) => e.currentTarget.classList.remove('over-top', 'over-bottom'),
+      ondrop: (e) => {
+        if (!dragKey || dragKey === c.key) return;
+        e.preventDefault();
+        const r = e.currentTarget.getBoundingClientRect();
+        const below = e.clientY > r.top + r.height / 2;
+        const from = clips.findIndex((x) => x.key === dragKey);
+        let to = i + (below ? 1 : 0);
+        if (from < to) to -= 1;
+        const key = dragKey;
+        changeArrange((a) => moveClip(a, ps(), key, to));
+      },
+    },
+      h('span.clip-grip', { 'aria-hidden': 'true', 'data-tip': 'ลากเพื่อเรียงลำดับ' }, icon('grip', 16)),
+      h('input', { type: 'checkbox', checked: c.on, disabled: running, 'aria-label': `เลือก ${c.name}`, onchange: (e) => changeArrange((a) => setClipOn(a, c.key, e.target.checked)) }),
+      h('input.clip-name', { type: 'text', value: c.named ? c.name : '', placeholder: c.name, maxlength: 60, disabled: running, 'aria-label': `ชื่อของ ${c.name}`, onchange: (e) => changeArrange((a) => setClipName(a, c.key, e.target.value)) }),
+      h('span.clip-time', `${clock(c.start)} – ${clock(c.end)}`),
+      h('span.clip-dur', formatDuration(c.end - c.start)),
+      h('button.ghost.icon-only.small', { type: 'button', disabled: running || i === 0, 'aria-label': `เลื่อน ${c.name} ขึ้น`, onclick: () => changeArrange((a) => moveClip(a, ps(), c.key, i - 1)) }, icon('arrowUp', 15)),
+      h('button.ghost.icon-only.small', { type: 'button', disabled: running || i === clips.length - 1, 'aria-label': `เลื่อน ${c.name} ลง`, onclick: () => changeArrange((a) => moveClip(a, ps(), c.key, i + 1)) }, icon('arrowDown', 15)));
+    const all = clips.every((c) => c.on);
+    return h('div.clips',
+      clips.length < 2 ? h('p.warn', icon('alert', 16), 'ยังไม่มีจุดตัด จึงมีชิ้นเดียว ', h('button.ghost.small', { type: 'button', onclick: () => app.go('review') }, 'กลับไปมาร์กจุดตัด')) : null,
+      h('div.clip-out',
+        h('label.tick', h('input', { type: 'radio', name: 'clip-out', checked: !joined, disabled: running, onchange: () => setArrange({ output: 'separate' }) }), h('span', 'แยกชิ้นละไฟล์')),
+        h('label.tick', h('input', { type: 'radio', name: 'clip-out', checked: joined, disabled: running, onchange: () => setArrange({ output: 'joined' }) }), h('span', 'ต่อเป็นไฟล์เดียวตามลำดับในรายการ'))),
+      h('ol.clip-list', clips.map(row)),
+      h('div.clip-tools',
+        h('button.ghost.small', { type: 'button', disabled: running, onclick: () => changeArrange((a) => ({ ...a, off: Object.fromEntries(clips.map((c) => [c.key, all])) })) }, all ? 'ไม่เลือกทั้งหมด' : 'เลือกทั้งหมด'),
+        isReordered(clips.map((c) => ({ ...c, on: true }))) ? h('button.ghost.small', { type: 'button', disabled: running, onclick: () => changeArrange(resetOrder) }, 'คืนลำดับเดิม') : null,
+        h('span.hint', 'ลากที่จุด 6 จุด หรือกดลูกศร เพื่อเรียงลำดับ')));
+  }
+
   function render() {
     const st = store.get();
     const tl = app.timeline();
-    const profile = getExportProfile(st.exportProfile) || exportProfiles()[0];
-    const { cuts, splits } = app.planInput();
-    const plan = buildPlan(tl, cuts, splits, { snap: profile.snapToKeyframes !== false });
+    const { profs, profile, plan, arrange, clips, ext } = current(st, tl);
+    const clipMode = arrange.mode === 'clips';
+    const audio = tl.kind === 'audio';
     const base = st.outputBase || defaultBase(st.videos);
     const undecided = { length: counts(st.edit, tl.duration).suggested };
     const toFolder = st.source?.kind === 'folder';
     const sizes = plan.parts.map((p) => estimatePartBytes(p, tl));
 
     const warnings = [];
-    if (undecided.length) warnings.push(h('p.warn', icon('alert', 16), `ยังมี ${undecided.length} ชิ้นที่แนะนำให้ทิ้งแต่ยังไม่ได้ตัดสินใจ ชิ้นเหล่านี้จะถูกเก็บไว้ `, h('button.ghost.small', { type: 'button', onclick: () => app.go('review') }, 'กลับไปตรวจ')));
-    if (st.compat && !st.compat.ok && profile.id === 'copy') warnings.push(h('p.warn', icon('alert', 16), 'ไฟล์วิดีโอแต่ละไฟล์ถูกบันทึกด้วยการตั้งค่าต่างกัน การต่อแบบไม่บีบอัดอาจได้ไฟล์ที่เล่นไม่ปกติ ถ้าเจอปัญหาให้เลือกแบบบีบอัด'));
-    if (!tl.hasKeyframes) warnings.push(h('p.warn', icon('alert', 16), 'อ่าน keyframe ของบางไฟล์ไม่ได้ ภาพอาจกระตุกสั้น ๆ ที่รอยตัด'));
+    if (undecided.length && !clipMode) warnings.push(h('p.warn', icon('alert', 16), `ยังมี ${undecided.length} ชิ้นที่แนะนำให้ทิ้งแต่ยังไม่ได้ตัดสินใจ ชิ้นเหล่านี้จะถูกเก็บไว้ `, h('button.ghost.small', { type: 'button', onclick: () => app.go('review') }, 'กลับไปตรวจ')));
+    if (st.compat && !st.compat.ok && profile.speed === 'fast') warnings.push(h('p.warn', icon('alert', 16), audio
+      ? 'ไฟล์เสียงแต่ละไฟล์ถูกบันทึกด้วยการตั้งค่าต่างกัน การต่อแบบไม่เข้ารหัสใหม่อาจได้ไฟล์ที่เล่นไม่ปกติ ถ้าเจอปัญหาให้เลือกแบบเข้ารหัสใหม่'
+      : 'ไฟล์วิดีโอแต่ละไฟล์ถูกบันทึกด้วยการตั้งค่าต่างกัน การต่อแบบไม่บีบอัดอาจได้ไฟล์ที่เล่นไม่ปกติ ถ้าเจอปัญหาให้เลือกแบบบีบอัด'));
+    if (clipMode && plan.snapped) warnings.push(h('p.hint', 'แบบไม่บีบอัด หัวของแต่ละชิ้นจะเริ่มที่ keyframe ก่อนจุดตัด จึงอาจมีภาพก่อนหน้าติดมา 1–2 วินาที เลือกแบบบีบอัดถ้าต้องการตรงจุดเป๊ะ'));
+    if (!audio && !tl.hasKeyframes) warnings.push(h('p.warn', icon('alert', 16), 'อ่าน keyframe ของบางไฟล์ไม่ได้ ภาพอาจกระตุกสั้น ๆ ที่รอยตัด'));
     plan.warnings.forEach((w) => warnings.push(h('p.warn', icon('alert', 16), w.message)));
     if (profile.speed === 'fast' && sizes.some((b) => b > MAX_OUTPUT_BYTES)) warnings.push(h('p.warn', icon('alert', 16), 'บางไฟล์ผลลัพธ์จะใหญ่เกิน ~1.9 GB ซึ่ง browser สร้างไม่ได้ เพิ่มจุดแบ่งไฟล์ในขั้นตรวจจุดตัด หรือเลือกแบบบีบอัด'));
 
@@ -163,19 +234,25 @@ export function mount(root, app) {
       h('div.export-grid',
         h('section.panel',
           h('h2', 'ผลลัพธ์'),
+          h('div.seg.mode', { role: 'tablist' },
+            h('button', { type: 'button', role: 'tab', disabled: running, 'aria-selected': String(!clipMode), onclick: () => setArrange({ mode: 'cut' }) }, 'ตัดช่วงทิ้ง'),
+            h('button', { type: 'button', role: 'tab', disabled: running, 'aria-selected': String(clipMode), onclick: () => setArrange({ mode: 'clips' }) }, 'เลือกและเรียงชิ้น')),
+          clipMode ? clipsPanel(arrange, clips, tl) : null,
           h('div.result-head',
-            h('div', h('div.big-num', formatTime(plan.keptDuration)), h('div.hint', `จาก ${formatTime(tl.duration)} · ตัดออก ${formatTime(plan.removedDuration)} (${plan.removed.length} ช่วง)`))),
+            h('div', h('div.big-num', formatTime(plan.keptDuration)), h('div.hint', clipMode
+              ? `จาก ${formatTime(tl.duration)} · เลือก ${clips.filter((c) => c.on).length} จาก ${clips.length} ชิ้น${arrange.output === 'joined' && isReordered(clips) ? ' · เรียงลำดับใหม่' : ''}`
+              : `จาก ${formatTime(tl.duration)} · ตัดออก ${formatTime(plan.removedDuration)} (${plan.removed.length} ช่วง)`))),
           h('table.parts',
             h('thead', h('tr', h('th', 'ไฟล์'), h('th', 'ความยาว'), h('th', profile.speed === 'fast' ? 'ขนาดประมาณ' : ''))),
             h('tbody', plan.parts.map((p, i) => h('tr',
-              h('td', partFileName(base, p, plan.parts.length, profile.outputExtension)),
+              h('td', partFileName(base, p, plan.parts.length, ext)),
               h('td.tc', formatTime(p.duration)),
               h('td.tc', profile.speed === 'fast' ? formatBytes(sizes[i]) : ''))))),
           warnings),
 
         h('section.panel',
           h('h2', 'วิธีสร้างไฟล์'),
-          h('div.profiles', exportProfiles().map((pr) => h(`label.profile${pr.id === profile.id ? '.chosen' : ''}`,
+          h('div.profiles', profs.map((pr) => h(`label.profile${pr.id === profile.id ? '.chosen' : ''}`,
             h('input', { type: 'radio', name: 'profile', value: pr.id, checked: pr.id === profile.id, disabled: running, onchange: () => store.set({ exportProfile: pr.id, exportOptions: {} }) }),
             h('span.profile-body',
               h('span.profile-name', pr.label, pr.experimental ? h('span.tag', 'ทดลอง') : null),
@@ -207,6 +284,14 @@ export function mount(root, app) {
   }
 
   render();
-  const unsub = store.subscribe(() => { if (!running) render(); });
+  // re-render only for state this screen shows: an autosave tick must not rebuild a field being typed in
+  const WATCH = ['edit', 'arrange', 'exportProfile', 'exportOptions', 'exportExtras', 'outputBase', 'videos', 'transcript', 'anchors', 'anchorMode', 'compat', 'source'];
+  let seen = WATCH.map((k) => store.get()[k]);
+  const unsub = store.subscribe((st) => {
+    const now = WATCH.map((k) => st[k]);
+    if (now.every((v, i) => v === seen[i])) return;
+    seen = now;
+    if (!running) render();
+  });
   return () => { unsub(); blobUrls.forEach((u) => URL.revokeObjectURL(u.url)); };
 }

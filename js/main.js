@@ -6,7 +6,7 @@ import { findTranscriptParser, detectors, mediaLayers } from './core/registry.js
 import { suggestCuts } from './core/analysis.js';
 import { applySuggestions, toPlanInput } from './core/cuts.js';
 import { dedupeLines } from './plugins/transcript/common.js';
-import { classifyFiles, pickFolder, pickFiles, pickFilesWithInput, listDirFiles, filesFromDrop, writeFileTo, downloadBlob, ensurePermission, canWriteNow, canOpenFolder, canPickFiles } from './io/folder.js';
+import { mediaKind, classifyFiles, pickFolder, pickFiles, pickFilesWithInput, listDirFiles, filesFromDrop, writeFileTo, downloadBlob, ensurePermission, canWriteNow, canOpenFolder, canPickFiles } from './io/folder.js';
 import * as jobsDb from './io/jobs-db.js';
 import { autoJobName, cleanJobName, duplicateName, jobSummary, matchFiles, relativeTime, lastActive, sortJobs } from './core/jobs.js';
 import { captureThumbnail } from './media/thumbnail.js';
@@ -39,9 +39,9 @@ const app = {
   /** Timeline for the current video order (cached). */
   timeline() {
     const s = store.get();
-    const key = s.videos.map((v) => `${v.id}:${v.duration}:${v.keyframes ? v.keyframes.length : 0}:${v.fps || 0}`).join('|');
+    const key = s.videos.map((v) => `${v.id}:${v.duration}:${v.keyframes ? v.keyframes.length : 0}:${v.fps || 0}:${v.kind || ''}`).join('|');
     if (key !== tlCache.key) {
-      tlCache = { key, tl: new Timeline(s.videos.map((v) => ({ id: v.id, name: v.name, size: v.size, duration: v.duration || 0, keyframes: v.keyframes, fps: v.fps }))) };
+      tlCache = { key, tl: new Timeline(s.videos.map((v) => ({ id: v.id, name: v.name, size: v.size, duration: v.duration || 0, keyframes: v.keyframes, fps: v.fps, kind: v.kind }))) };
     }
     return tlCache.tl;
   },
@@ -81,7 +81,7 @@ const app = {
   /** New job from picked files, or the existing job when these are the same folder / files. */
   async startJob(files, src) {
     const c = classifyFiles(files);
-    if (!c.videos.length) { toast('ไม่พบไฟล์วิดีโอ (.mp4 / .mov) ในสิ่งที่เลือก', 'error'); return; }
+    if (!c.videos.length) { toast('ไม่พบไฟล์วิดีโอ (.mp4 / .mov) หรือไฟล์เสียง (.mp3 / .m4a / .wav) ในสิ่งที่เลือก', 'error'); return; }
     let saved = null;
     if (c.project) { try { saved = JSON.parse(await c.project.text()); } catch { /* broken file */ } }
     if (saved?.app !== 'clipcut') saved = null;
@@ -204,11 +204,11 @@ const app = {
   /** Load a job's files and its saved work, then open it at the step the user left. */
   async loadJob(rec, files) {
     const c = classifyFiles(files);
-    const b = busy('กำลังอ่านไฟล์วิดีโอ…');
+    const b = busy('กำลังอ่านไฟล์…');
     loading = true;
     try {
       for (const v of store.get().videos) URL.revokeObjectURL(v.url);
-      const videos = c.videos.map((file) => ({ id: newId('v'), name: file.name, size: file.size, lastModified: file.lastModified, file, url: URL.createObjectURL(file) }));
+      const videos = c.videos.map((file) => ({ id: newId('v'), kind: mediaKind(file.name), name: file.name, size: file.size, lastModified: file.lastModified, file, url: URL.createObjectURL(file) }));
       await Promise.all(videos.map(async (v) => Object.assign(v, await probeVideo(v))));
       const source = rec.dir ? { kind: 'folder', dir: rec.dir, name: rec.source?.name || rec.dir.name } : { kind: 'files', name: rec.source?.name || '' };
       store.reset({ step: 'files', source, videos, transcriptCandidates: c.transcripts, otherFiles: c.ignored.map((f) => f.name), jobId: rec.id, jobName: rec.name });
@@ -395,7 +395,7 @@ const app = {
     const have = app.validLayers();
     const missingLayers = mediaLayers().map((l) => l.id).filter((id) => force || !have[id]);
     const needsMedia = missing.length > 0 || missingLayers.length > 0;
-    const noKeyframes = s.videos.filter((v) => !v.keyframes && !v.kfTried);
+    const noKeyframes = s.videos.filter((v) => v.kind !== 'audio' && !v.keyframes && !v.kfTried);
     if (needsMedia || !s.compat || noKeyframes.length) {
       const b = busy('เตรียมวิเคราะห์เสียง…');
       try {
@@ -492,7 +492,7 @@ let warnedStorage = false;
 let warnedSave = false;
 const videoFacts = (v) => ({ name: v.name, size: v.size, duration: v.duration || 0, fps: v.fps || null });
 // state that is part of the work; changes to all but `analysis` count as edits (for "แก้หลังส่งออก")
-const PERSISTED = ['videos', 'transcript', 'anchors', 'anchorMode', 'analysis', 'layers', 'edit', 'detectorSettings', 'exportProfile', 'exportOptions', 'exportExtras', 'outputBase'];
+const PERSISTED = ['videos', 'transcript', 'anchors', 'anchorMode', 'analysis', 'layers', 'edit', 'detectorSettings', 'exportProfile', 'exportOptions', 'exportExtras', 'arrange', 'outputBase'];
 const NOT_EDITS = new Set(['analysis', 'layers']);
 let snapshot = null;
 let lastStep = null;
@@ -559,6 +559,7 @@ function showHelp() {
       h('p', 'เปิดโฟลเดอร์ที่มีวิดีโอ หรือเลือกไฟล์ หรือลากมาวาง ใส่ได้:'),
       h('ul',
         h('li', h('strong', 'วิดีโอ .mp4 หรือ .mov'), ' ไฟล์เดียว หรือหลายไฟล์ที่บันทึกต่อกัน แอปจะต่อตามลำดับชื่อไฟล์ (เปลี่ยนลำดับได้)'),
+        h('li', h('strong', 'ไฟล์เสียง .mp3, .m4a หรือ .wav'), ' ตัด แบ่ง และเรียงต่อได้เหมือนวิดีโอ (งานหนึ่งเป็นวิดีโอหรือเสียงอย่างใดอย่างหนึ่ง)'),
         h('li', h('strong', 'transcript ที่มีเวลากำกับ'), ' (.docx, .vtt, .srt หรือ .txt) ไม่มีก็ได้ แอปจะหาจากเสียงเงียบอย่างเดียว')),
       h('h3', 'งานถูกเก็บไว้ที่ไหน'),
       h('p', 'รายการงานเก็บใน browser เครื่องนี้ ไม่คัดลอกวิดีโอ งานที่เปิดจากโฟลเดอร์จะมีไฟล์ clipcut.project.json ในโฟลเดอร์นั้นด้วย เปิดโฟลเดอร์เดิมบนเครื่องอื่นก็ทำต่อได้ ผลลัพธ์อยู่ในโฟลเดอร์ output'),

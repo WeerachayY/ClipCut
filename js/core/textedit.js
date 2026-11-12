@@ -42,7 +42,7 @@ export function quietestNear(layer, t, window = 0.6) {
   let best = -1;
   let bestV = Infinity;
   for (let i = a; i <= b; i++) {
-    const v = peaks[i] + Math.abs(i - c) * 0.6; // a little preference for staying close to the transcript time
+    const v = peaks[i] + (Math.abs(i - c) / rate) * 60; // a little preference for staying close to the transcript time
     if (v < bestV) { bestV = v; best = i; }
   }
   return best < 0 ? t : best / rate;
@@ -64,4 +64,49 @@ export function lineStates(spans, pieces) {
     if (overlap(sug, sp.start, sp.start + len) / len >= 0.6) return 'suggested';
     return 'kept';
   });
+}
+
+// ---------- where sound starts and stops ----------
+const edgeCache = new WeakMap();
+
+/**
+ * Times where sound starts ('on') or stops ('off'), from the waveform layer. Pauses shorter than `minQuiet`
+ * (breaths, the gap inside a word) and blips shorter than `minLoud` (a click) are ignored.
+ * @returns {{t:number, kind:'on'|'off'}[]}
+ */
+export function soundEdges(layer, { threshold = 14, minQuiet = 0.18, minLoud = 0.04 } = {}) {
+  if (!layer?.peaks?.length) return [];
+  const hit = edgeCache.get(layer.peaks);
+  if (hit) return hit;
+  const { rate, peaks } = layer;
+  // runs of loud / quiet
+  const runs = [];
+  let from = 0;
+  let loud = peaks[0] > threshold;
+  for (let i = 1; i <= peaks.length; i++) {
+    const l = i < peaks.length ? peaks[i] > threshold : !loud;
+    if (l !== loud) { runs.push({ loud, from, to: i }); from = i; loud = l; }
+  }
+  const merge = (keep) => {
+    const out = [];
+    for (const r of runs.splice(0)) {
+      const last = out[out.length - 1];
+      if (last && (last.loud === r.loud || !keep(r))) last.to = r.to; else out.push({ ...r });
+    }
+    runs.push(...out);
+  };
+  merge((r) => r.loud || (r.to - r.from) / rate >= minQuiet); // close short pauses
+  merge((r) => !r.loud || (r.to - r.from) / rate >= minLoud); // drop short blips
+  const edges = [];
+  for (let i = 1; i < runs.length; i++) edges.push({ t: runs[i].from / rate, kind: runs[i].loud ? 'on' : 'off' });
+  edgeCache.set(layer.peaks, edges);
+  return edges;
+}
+
+/** The next (dir = 1) or previous (dir = -1) sound edge from time t, or null. */
+export function nextSoundEdge(layer, t, dir) {
+  const edges = soundEdges(layer);
+  if (dir > 0) return edges.find((e) => e.t > t + 0.003) || null;
+  for (let i = edges.length - 1; i >= 0; i--) if (edges[i].t < t - 0.003) return edges[i];
+  return null;
 }

@@ -52,7 +52,7 @@ export function mount(root, app) {
     clear(body,
       h('div.files-grid',
         h('section.panel',
-          h('h2', 'วิดีโอ ', h('span.count', `${s.videos.length} ไฟล์ · รวม ${formatTime(tl.duration)}`)),
+          h('h2', tl.kind === 'audio' ? 'ไฟล์เสียง ' : 'วิดีโอ ', h('span.count', `${s.videos.length} ไฟล์ · รวม ${formatTime(tl.duration)}`)),
           s.videos.length > 1 ? h('p.hint', 'แอปจะต่อไฟล์ตามลำดับนี้ ตรวจว่าลำดับถูกต้องตามเวลาที่บันทึก') : null,
           h('ol.vlist', videoRows),
           noKf.length ? h('p.warn', icon('alert', 16), noKf.some((v) => !v.kfTried) ? 'อ่านตำแหน่ง keyframe จากดัชนีไฟล์ไม่ได้ จะลองอีกวิธีตอนหาจุดตัด' : 'อ่าน keyframe ไม่ได้ จะตัดตรงเวลาที่ตั้ง แต่ภาพอาจกระตุกสั้น ๆ ที่รอยตัด') : null,

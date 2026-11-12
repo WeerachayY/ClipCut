@@ -4,9 +4,13 @@
 // cut points can be snapped to places where a lossless (stream copy) cut is clean.
 
 export class Timeline {
-  /** @param {{id:string,name:string,duration:number,keyframes?:number[]|null}[]} files in playback order */
+  /** @param {{id:string,name:string,duration:number,keyframes?:number[]|null,kind?:'video'|'audio'}[]} files in playback order */
   constructor(files) {
     this.files = files.map((f, index) => ({ ...f, index }));
+    // an audio job (mp3, m4a, wav): no picture, no keyframes, any point is a clean cut for a re-encode
+    this.kind = this.files.length > 0 && this.files.every((f) => f.kind === 'audio') ? 'audio' : 'video';
+    const dot = (this.files[0]?.name || '').lastIndexOf('.');
+    this.ext = dot >= 0 ? this.files[0].name.slice(dot + 1).toLowerCase() : '';
     let acc = 0;
     for (const f of this.files) {
       f.start = acc;

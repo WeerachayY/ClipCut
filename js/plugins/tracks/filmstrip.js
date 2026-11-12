@@ -4,6 +4,7 @@ export default {
   id: 'filmstrip',
   label: 'ภาพ',
   order: 10,
+  needs: 'video',
   height: 60,
   enabledByDefault: true,
   draw(view) {

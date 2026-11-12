@@ -13,7 +13,9 @@ const loadHidden = () => { try { return new Set(JSON.parse(localStorage.getItem(
 const hasPrefs = () => { try { return localStorage.getItem(PREFS) != null; } catch { return false; } };
 const saveHidden = (set) => { try { localStorage.setItem(PREFS, JSON.stringify([...set])); } catch { /* private mode */ } };
 
-const ZOOMS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048];
+const ZOOMS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768];
+const MAX_WIDTH = 12_000_000; // px: browsers stop laying out reliably somewhere above this
+const MAX_PX_PER_SEC = 6000;  // 6 px per millisecond is as fine as the 1 ms waveform goes
 const TICKS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600, 900, 1800, 3600];
 
 export class TimelineView {
@@ -96,7 +98,7 @@ export class TimelineView {
   }
 
   #renderToggles() {
-    clear(this.trackToggles, tracks().map((t) => {
+    clear(this.trackToggles, this.#tracks().map((t) => {
       const on = !this.hidden.has(t.id);
       return h(`button.tl-track-toggle${on ? '.on' : ''}`, {
         type: 'button', 'aria-pressed': String(on), 'data-tip': on ? `ซ่อนแทร็ก${t.label}` : `แสดงแทร็ก${t.label}`,
@@ -105,15 +107,19 @@ export class TimelineView {
     }));
   }
 
+  /** Tracks that make sense for this job (no stills for an audio file). */
+  #tracks() { return tracks().filter((t) => !t.needs || t.needs === (this.kind || 'video')); }
+
   /** One lane per visible track; everything else (pieces, marks, playhead, command bar) stretches to fit. */
   #buildLanes() {
     this.#renderToggles();
     let y = 0;
-    this.laneList = tracks().filter((t) => !this.hidden.has(t.id)).map((t) => {
+    this.laneList = this.#tracks().filter((t) => !this.hidden.has(t.id)).map((t) => {
       const canvas = h('canvas.tl-canvas');
-      const el = h('div.tl-lane', { dataset: { track: t.id }, style: { top: `${y}px`, height: `${t.height}px` } }, canvas);
-      const lane = { t, el, canvas };
-      y += t.height + LANE_GAP;
+      const height = (this.kind === 'audio' && t.audioHeight) || t.height;
+      const el = h('div.tl-lane', { dataset: { track: t.id }, style: { top: `${y}px`, height: `${height}px` } }, canvas);
+      const lane = { t, el, canvas, height };
+      y += height + LANE_GAP;
       return lane;
     });
     const H = Math.max(28, y - LANE_GAP);
@@ -149,17 +155,17 @@ export class TimelineView {
     const t1 = Math.min(this.duration, (left + vw) / pxPerSec);
     const dpr = window.devicePixelRatio || 1;
     const colors = this.#colors();
-    for (const { t, canvas } of this.laneList) {
+    for (const { t, canvas, height } of this.laneList) {
       const cw = Math.max(1, Math.round(vw * dpr));
-      const ch = Math.round(t.height * dpr);
+      const ch = Math.round(height * dpr);
       if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
-      Object.assign(canvas.style, { width: `${vw}px`, height: `${t.height}px`, left: `${left}px` });
+      Object.assign(canvas.style, { width: `${vw}px`, height: `${height}px`, left: `${left}px` });
       const g = canvas.getContext('2d');
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
-      g.clearRect(0, 0, vw, t.height);
+      g.clearRect(0, 0, vw, height);
       try {
         t.draw({
-          g, width: vw, height: t.height, t0, t1, pxPerSec, duration: this.duration, x: (s) => (s - t0) * pxPerSec,
+          g, width: vw, height, t0, t1, pxPerSec, duration: this.duration, x: (s) => (s - t0) * pxPerSec,
           timeline: this.data.timeline, frames: this.media.frames, analysis: this.media.analysis, colors,
           layer: t.layer ? this.media.layers?.[t.layer] || null : null,
           progress: t.layer ? this.media.progress?.[t.layer] ?? null : null,
@@ -172,6 +178,15 @@ export class TimelineView {
   dispose() { this.unFrames?.(); cancelAnimationFrame(this.rafDraw); }
 
   get fps() { return this.data?.timeline.fps || 30; }
+
+  /**
+   * How times are shown and where cut points may sit: frames of the picture, or milliseconds for audio work.
+   * @param {{format:(t:number, short:boolean)=>string, grid:number}} u  grid = seconds between allowed positions
+   */
+  setUnit(u) {
+    this.unit = u;
+    if (this.data) this.#renderRuler();
+  }
   zoomIn() { this.setZoom(this.zoomIndex + 1, { t: this.lastT }); }
   zoomOut() { this.setZoom(this.zoomIndex - 1, { t: this.lastT }); }
 
@@ -185,7 +200,7 @@ export class TimelineView {
   #pct(t) { return `${(t / this.duration) * 100}%`; }
 
   #showHover(t) {
-    this.hover.textContent = formatTimecode(t, this.fps, { short: this.duration < 3600 });
+    this.hover.textContent = this.unit ? this.unit.format(t, this.duration < 3600) : formatTimecode(t, this.fps, { short: this.duration < 3600 });
     this.hover.style.left = this.#pct(t);
     // keep the label inside the strip at both ends, or it widens the scroll area
     const r = t / this.duration;
@@ -218,7 +233,8 @@ export class TimelineView {
     const move = (ev) => {
       if (!moved && Math.abs(ev.clientX - startX) < 3) return;
       moved = true;
-      t = Math.min(hi, Math.max(lo, Math.round(this.#timeAt(ev.clientX) * this.fps) / this.fps));
+      const grid = this.unit?.grid || 1 / this.fps;
+      t = Math.min(hi, Math.max(lo, Math.round(this.#timeAt(ev.clientX) / grid) * grid));
       // snap to the playhead when close (8 px)
       const ph = this.cb.getPlayhead?.();
       const pxPerSec = this.inner.getBoundingClientRect().width / this.duration;
@@ -241,7 +257,11 @@ export class TimelineView {
   /** Change zoom; keeps `anchor.t` under `anchor.clientX` (or centred) so the view does not jump. */
   setZoom(i, anchor = null) {
     const prev = this.zoomIndex;
-    this.zoomIndex = Math.max(0, Math.min(ZOOMS.length - 1, i));
+    // deepest useful zoom depends on the length: stop where a millisecond is a few pixels wide
+    const base = this.scroll.clientWidth || 1000;
+    let top = ZOOMS.length - 1;
+    while (top > 0 && (ZOOMS[top] * base > MAX_WIDTH || (ZOOMS[top] * base) / this.duration > MAX_PX_PER_SEC * 2)) top--;
+    this.zoomIndex = Math.max(0, Math.min(top, i));
     if (this.zoomIndex === prev && anchor) return;
     const z = ZOOMS[this.zoomIndex];
     this.inner.style.width = `${z * 100}%`;
@@ -261,6 +281,7 @@ export class TimelineView {
    */
   render(d) {
     this.data = d;
+    if (d.timeline.kind !== this.kind) { this.kind = d.timeline.kind; this.#buildLanes(); }
     this.duration = Math.max(1, d.timeline.duration);
     const sel = d.selection || {};
     const files = d.timeline.files.length > 1 ? d.timeline.files.map((f, i) => h('div.tl-file', { style: { left: this.#pct(f.start), width: this.#pct(f.duration) } },
@@ -291,8 +312,9 @@ export class TimelineView {
   #renderRuler() {
     const width = this.inner.clientWidth || 800;
     const secPerPx = this.duration / width;
-    const frame = 1 / this.fps;
-    const steps = [frame, ...TICKS.filter((t) => t > frame)];
+    const frame = this.unit?.grid >= 0.002 ? this.unit.grid : 1 / this.fps;
+    const fine = this.unit && this.unit.grid < 0.002 ? [0.001, 0.002, 0.005, 0.01, 0.02, 0.05] : [frame];
+    const steps = [...fine, ...TICKS.filter((t) => t > fine[fine.length - 1])];
     const step = steps.find((t) => t / secPerPx >= 90) || 3600;
     // only the visible stretch (plus one screen either side) gets tick labels
     const view = this.scroll.clientWidth || width;
@@ -302,7 +324,7 @@ export class TimelineView {
     const short = this.duration < 3600;
     for (let k = Math.floor(from / step); k * step <= to + 1e-9; k++) {
       const t = k * step;
-      const label = step < 1 ? formatTimecode(t, this.fps, { short }) : formatTime(t, { short });
+      const label = step >= 1 ? formatTime(t, { short }) : this.unit ? this.unit.format(t, short) : formatTimecode(t, this.fps, { short });
       ticks.push(h('span.tl-tick', { style: { left: this.#pct(t) } }, label));
     }
     clear(this.ruler, ticks);

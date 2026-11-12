@@ -48,6 +48,17 @@ export function formatTimecode(sec, fps = 30, { short = false } = {}) {
   return `${sign}${h}:${p2(m)}:${p2(ss)}:${p2(f)}`;
 }
 
+/** Clock with milliseconds, for audio work: 3910.5 -> "1:05:10.500" (short drops a zero hour). */
+export function formatClockMs(sec, { short = false } = {}) {
+  if (!Number.isFinite(sec)) return '--:--.---';
+  const sign = sec < 0 ? '-' : '';
+  const ms = Math.round(Math.abs(sec) * 1000);
+  const p = (n, w = 2) => String(n).padStart(w, '0');
+  const h = Math.floor(ms / 3_600_000);
+  const rest = `${p(Math.floor(ms / 60_000) % 60)}:${p(Math.floor(ms / 1000) % 60)}.${p(ms % 1000, 3)}`;
+  return short && h === 0 ? `${sign}${rest}` : `${sign}${h}:${rest}`;
+}
+
 /** Snap a time to the start of the frame it falls in (plus a hair so seeking lands inside it). */
 export const toFrame = (sec, fps = 30) => Math.round(sec * fps) / fps;
 

@@ -80,6 +80,18 @@ export class MultiPlayer extends EventTarget {
     this.seek(Math.max(0, frame / fps + 0.25 / fps));
   }
 
+  /**
+   * Move n steps of `size` seconds on that grid (pauses first). `inside` aims a little into the step,
+   * which a picture frame needs so the decoder shows that frame and not the one before.
+   */
+  step(n, size, inside = 0) {
+    if (!this.timeline) return;
+    this.video.pause();
+    this.previewState = null;
+    const k = Math.round((this.time - inside) / size) + n;
+    this.seek(Math.max(0, k * size + inside));
+  }
+
   /** Jump by seconds, keeping play/pause state. */
   jump(seconds) { this.seek(this.time + seconds); }
 

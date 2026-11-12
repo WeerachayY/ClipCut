@@ -7,6 +7,12 @@ export const MAX_OUTPUT_BYTES = 1.9 * 1024 ** 3; // browser memory ceiling for o
 
 export const safeName = (s) => String(s).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 80);
 
+/** Output file extension of a profile for this timeline (audio profiles follow the source format). */
+export const outputExtension = (profile, timeline) => (typeof profile.outputExtension === 'function' ? profile.outputExtension(timeline) : profile.outputExtension) || 'mp4';
+
+/** Export profiles that fit this timeline (video or audio job). */
+export const profilesFor = (profiles, timeline) => profiles.filter((p) => (p.media || 'video') === timeline.kind);
+
 export function partFileName(base, part, count, ext = 'mp4') {
   const b = safeName(base) || 'video';
   if (count <= 1) return `${b}.${ext}`;
@@ -40,11 +46,16 @@ export async function runExport({ plan, timeline, files, profile, options, outpu
     hasAudio = info.every((streams) => streams.some((x) => x.startsWith('Audio')));
   }
   const results = [];
+  const ext = outputExtension(profile, timeline);
+  const fail = async (name, log, outPath) => {
+    await ffmpeg.deleteFile(outPath).catch(() => {});
+    const tail = log.filter((l) => !/^\s*(frame|size)=/.test(l)).slice(-6).join('\n');
+    throw new Error(`สร้าง ${name} ไม่สำเร็จ\n${tail}`);
+  };
   for (const part of parts) {
     const listPath = `/list${part.index}.txt`;
-    const outPath = `/out${part.index}.${profile.outputExtension || 'mp4'}`;
-    const name = partFileName(outputBase, part, parts.length, profile.outputExtension || 'mp4');
-    await ffmpeg.writeText(listPath, buildConcatList(part, (i) => paths[i]));
+    const outPath = `/out${part.index}.${ext}`;
+    const name = partFileName(outputBase, part, parts.length, ext);
     const started = performance.now();
     const report = (t) => {
       const elapsed = (performance.now() - started) / 1000;
@@ -56,17 +67,37 @@ export async function runExport({ plan, timeline, files, profile, options, outpu
       });
     };
     report(0);
-    const args = profile.buildArgs({ listPath, outPath, options, segments: part.segments, inputPaths: paths, hasAudio });
-    const { code, log } = await ffmpeg.run(args, { onTime: report });
-    if (code !== 0) {
-      await ffmpeg.deleteFile(outPath);
-      const tail = log.filter((l) => !/^\s*(frame|size)=/.test(l)).slice(-6).join('\n');
-      throw new Error(`สร้าง ${name} ไม่สำเร็จ\n${tail}`);
+    if (profile.perSegment) {
+      // cut every segment on its own, then join the pieces (a single piece is the result as it is)
+      const tmp = [];
+      let done = 0;
+      for (const [k, segment] of part.segments.entries()) {
+        const segPath = part.segments.length === 1 ? outPath : `/seg${part.index}_${k}.${ext}`;
+        const { code, log } = await ffmpeg.run(profile.perSegment.segmentArgs({ inputPath: paths[segment.fileIndex], segment, outPath: segPath, options }), {
+          // -ss as an output option: the clock runs from the start of the file, and from 0 once inside the piece
+          onTime: (t) => report(done + Math.min(segment.duration, Math.max(0, t))),
+        });
+        if (code !== 0) await fail(name, log, segPath);
+        tmp.push(segPath);
+        done += segment.duration;
+        report(done);
+      }
+      if (tmp.length > 1) {
+        await ffmpeg.writeText(listPath, `ffconcat version 1.0\n${tmp.map((p) => `file '${p}'`).join('\n')}\n`);
+        const { code, log } = await ffmpeg.run(profile.perSegment.joinArgs({ listPath, outPath, options }));
+        for (const p of tmp) await ffmpeg.deleteFile(p).catch(() => {});
+        if (code !== 0) await fail(name, log, outPath);
+      }
+    } else {
+      await ffmpeg.writeText(listPath, buildConcatList(part, (i) => paths[i]));
+      const args = profile.buildArgs({ listPath, outPath, options, segments: part.segments, inputPaths: paths, hasAudio });
+      const { code, log } = await ffmpeg.run(args, { onTime: report });
+      if (code !== 0) await fail(name, log, outPath);
     }
     onProgress?.({ part: part.index, parts: parts.length, ratio: 1, speed: null, message: `กำลังบันทึก ${name}` });
     const data = await ffmpeg.readFile(outPath);
     await ffmpeg.deleteFile(outPath);
-    await ffmpeg.deleteFile(listPath);
+    await ffmpeg.deleteFile(listPath).catch(() => {});
     await writeOutput(name, data);
     results.push({ name, bytes: data.byteLength, duration: part.duration });
   }

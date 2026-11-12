@@ -35,13 +35,21 @@
   experimental: false,
   snapToKeyframes: true,           // true เมื่อ copy ภาพ (ต้องเริ่มทุกชิ้นที่ keyframe); false = ตัดตรงจุด (ต้อง encode ใหม่)
   needsStreamInfo: false,          // true ถ้าต้องรู้ว่าไฟล์มีเสียงไหม (จะได้ hasAudio)
-  outputExtension: 'mp4',
+  media: 'video',                  // 'audio' = ใช้กับงานไฟล์เสียง (mp3/m4a/wav); ไม่ใส่ = วิดีโอ
+  outputExtension: 'mp4',          // หรือ (timeline) => 'mp3' ถ้านามสกุลตามไฟล์ต้นฉบับ (timeline.ext)
   options: [ { key, label, type: 'select', default, choices: [{ value, label }] } ],
   // listPath : ffconcat ของชิ้นที่เก็บไว้ (เหมาะกับ -c copy)
   // segments : [{ fileIndex, inpoint, outpoint|null }] ใช้คู่กับ inputPaths[fileIndex] (เหมาะกับการ encode ใหม่แบบตัดเป๊ะ)
   buildArgs({ listPath, outPath, options, segments, inputPaths, hasAudio }) { return [ ...ffmpeg args... ]; },
 }
 ```
+
+ถ้าการตัดแต่ละช่วงต้องรัน ffmpeg แยก (เช่น เสียงแบบไม่เข้ารหัสใหม่ ที่ตัดทีละชิ้นแล้วค่อยต่อ) ใช้ `perSegment` แทน `buildArgs`:
+`perSegment: { segmentArgs({ inputPath, segment, outPath, options }), joinArgs({ listPath, outPath, options }) }`
+(ดู `js/plugins/export/audio-copy.js`)
+
+แผนส่งออกมาจาก `buildPlan` (โหมดตัดช่วงทิ้ง) หรือ `buildClipPlan` (โหมดเลือกและเรียงชิ้น) ใน `js/core/plan.js`
+ทั้งสองคืนรูปเดียวกัน วิธีส่งออกและไฟล์ที่ได้เพิ่มจึงใช้ได้กับทั้งสองโหมดโดยไม่ต้องรู้ว่าเป็นโหมดไหน
 
 ### ตัวอย่าง: ปรับเสียงให้ดังเท่ากันทั้งไฟล์ (ภาพไม่ encode ใหม่ จึงยังเร็ว)
 
@@ -209,6 +217,7 @@ export default {
 ```js
 {
   id, label, order: 30, height: 32, enabledByDefault: true,
+  needs: 'video',               // ไม่บังคับ: แสดงเฉพาะงานวิดีโอ ('audio' = เฉพาะงานเสียง)
   layer: 'waveform',            // ไม่บังคับ: ข้อมูลจาก media layer ไหน
   draw(view) { ... },
 }

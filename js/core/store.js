@@ -1,6 +1,7 @@
 // Application state with a tiny subscribe/notify loop, plus project (de)serialisation.
 // Video File objects and folder handles live only in memory; the project file stores
 // names, sizes and every decision so work can be resumed later.
+import { emptyArrange } from './arrange.js';
 import { defaultDetectorSettings } from './registry.js';
 import { emptyEdit, fromLegacy } from './cuts.js';
 export { newId } from './id.js';
@@ -29,6 +30,7 @@ export function initialState() {
     exportProfile: 'copy',
     exportOptions: {},
     exportExtras: {},        // {extraId: {on, ...options}} for side files such as captions
+    arrange: emptyArrange(), // "pick and arrange pieces" mode of the export step (core/arrange.js)
     outputBase: '',
     selection: null,         // {type:'piece', key} | {type:'mark', id}
     savedAt: null,
@@ -71,6 +73,7 @@ export function serializeProject(s) {
     exportProfile: s.exportProfile,
     exportOptions: s.exportOptions,
     exportExtras: s.exportExtras,
+    arrange: s.arrange,
     outputBase: s.outputBase,
   };
 }
@@ -102,6 +105,7 @@ export function restoreProject(saved, videos) {
     exportProfile: saved.exportProfile || 'copy',
     exportOptions: saved.exportOptions || {},
     exportExtras: saved.exportExtras || {},
+    arrange: { ...emptyArrange(), ...(saved.arrange || {}) },
     outputBase: saved.outputBase || '',
   };
 }

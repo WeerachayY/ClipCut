@@ -21,7 +21,7 @@ export function videoDuration(url) {
 export async function probeVideo(video) {
   const out = { duration: null, keyframes: null, kfSource: null, fps: null, error: null, playable: true };
   try { out.duration = await videoDuration(video.url); } catch (e) { out.error = e.message; out.playable = false; }
-  const k = await readMp4Keyframes(video.file);
+  const k = video.kind === 'audio' ? null : await readMp4Keyframes(video.file);
   if (k) {
     out.keyframes = k.keyframes;
     out.kfSource = 'mp4';

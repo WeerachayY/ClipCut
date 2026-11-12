@@ -99,3 +99,18 @@ test('VTT end times reach the timeline', () => {
   const mapped = mapLines({ lines }, [{ id: 'a', tau: 1, g: 11 }], 'linear');
   assert.equal(mapped[0].gEnd, 13.5);
 });
+
+test('sound edges ignore breaths and clicks', async () => {
+  const { soundEdges, nextSoundEdge } = await import('../js/core/textedit.js');
+  const peaks = new Uint8Array(5000); // 5 s at 1000/s
+  peaks.fill(120, 1000, 2000);        // speech 1.0–2.0
+  peaks.fill(0, 1400, 1450);          // a 50 ms breath inside it
+  peaks.fill(200, 2500, 2510);        // a 10 ms click
+  peaks.fill(120, 3000, 4200);        // speech 3.0–4.2
+  const layer = { rate: 1000, peaks };
+  assert.deepEqual(soundEdges(layer), [{ t: 1, kind: 'on' }, { t: 2, kind: 'off' }, { t: 3, kind: 'on' }, { t: 4.2, kind: 'off' }]);
+  assert.equal(nextSoundEdge(layer, 1.5, 1).t, 2);
+  assert.equal(nextSoundEdge(layer, 3, -1).t, 2);
+  assert.equal(nextSoundEdge(layer, 0.5, -1), null);
+  assert.equal(nextSoundEdge(null, 1, 1), null);
+});

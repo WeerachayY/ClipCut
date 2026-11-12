@@ -11,7 +11,10 @@
 //
 // Export profile (turns a concat list into an output file)
 //   { id, label, description, speed: 'fast'|'slow', experimental?, options: [{key,label,type:'select',choices:[{value,label}],default}],
-//     outputExtension: 'mp4', buildArgs({listPath, outPath, options}) -> string[] }
+//     media?: 'video'|'audio' (default video), outputExtension: 'mp4' | (timeline) => string,
+//     buildArgs({listPath, outPath, options, segments, inputPaths, hasAudio}) -> string[]
+//     or perSegment: { segmentArgs({inputPath, segment, outPath, options}), joinArgs({listPath, outPath, options}) }
+//       (each segment is cut on its own, then the pieces are joined) }
 //
 // Media layer (data measured from the recordings once, kept with the job, drawn by tracks or used by detectors)
 //   { id, label, version, needs: 'audio',
@@ -48,7 +51,7 @@ function add(kind, plugin, required) {
 
 export const registerTranscriptParser = (p) => add('transcriptParsers', p, ['id', 'label', 'extensions', 'parse']);
 export const registerDetector = (p) => add('detectors', p, ['id', 'label', 'needs', 'detect']);
-export const registerExportProfile = (p) => add('exportProfiles', p, ['id', 'label', 'buildArgs']);
+export const registerExportProfile = (p) => add('exportProfiles', p, ['id', 'label', p.perSegment ? 'perSegment' : 'buildArgs']);
 export const registerMediaLayer = (p) => add('mediaLayers', p, ['id', 'label', 'version', 'needs', 'ffmpegOutput', 'collect', 'combine']);
 export const registerTrack = (p) => add('tracks', p, ['id', 'label', 'height', 'draw']);
 export const registerExportExtra = (p) => add('exportExtras', p, ['id', 'label', 'build']);

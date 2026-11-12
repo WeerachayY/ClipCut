@@ -1,6 +1,6 @@
 // Home: start a new job, or pick up an earlier one.
 import { h, clear, icon, toast, ask } from './dom.js';
-import { canOpenFolder, canPickFiles, VIDEO_EXT, TRANSCRIPT_EXT } from '../io/folder.js';
+import { canOpenFolder, canPickFiles, MEDIA_EXT, TRANSCRIPT_EXT } from '../io/folder.js';
 import { jobStatus, relativeTime, searchJobs } from '../core/jobs.js';
 import { formatTime, formatDuration } from '../core/time.js';
 
@@ -12,7 +12,7 @@ export function mount(root, app) {
   const thumbs = new Map(); // job id -> {blob, url}
 
   const input = h('input', {
-    type: 'file', multiple: true, hidden: true, accept: [...VIDEO_EXT, ...TRANSCRIPT_EXT, '.json'].join(','),
+    type: 'file', multiple: true, hidden: true, accept: [...MEDIA_EXT, ...TRANSCRIPT_EXT, '.json'].join(','),
     onchange: (e) => { if (e.target.files.length) app.newFromFiles(e.target.files); e.target.value = ''; },
   });
   const pickFiles = () => (canPickFiles() ? app.newFromFiles() : input.click());
@@ -36,7 +36,7 @@ export function mount(root, app) {
       h('div.nj-icon', icon('plus', big ? 28 : 24)),
       h('div.nj-text',
         h('h2', 'งานใหม่'),
-        h('p', canOpenFolder() ? 'เปิดโฟลเดอร์ที่มีวิดีโอ เลือกไฟล์ หรือลากมาวางที่หน้านี้' : 'เลือกไฟล์วิดีโอ หรือลากมาวางที่หน้านี้')),
+        h('p', canOpenFolder() ? 'เปิดโฟลเดอร์ที่มีวิดีโอหรือไฟล์เสียง เลือกไฟล์ หรือลากมาวางที่หน้านี้' : 'เลือกไฟล์วิดีโอ หรือลากมาวางที่หน้านี้')),
       h('div.nj-actions',
         canOpenFolder() ? h('button.primary', { type: 'button', onclick: () => app.newFromFolder() }, icon('folder', 18), 'เปิดโฟลเดอร์') : null,
         h(canOpenFolder() ? 'button.secondary' : 'button.primary', { type: 'button', onclick: pickFiles }, icon('file', 18), 'เลือกไฟล์')));
@@ -145,7 +145,7 @@ export function mount(root, app) {
         type: 'button', 'aria-label': `เปิดงาน ${job.name}`, onclick: () => open(job),
         onkeydown: (e) => { if (e.key === 'F2') { e.preventDefault(); startRename(job); } },
       },
-        url ? h('img', { src: url, alt: '' }) : h('span.job-ph', icon('film', 30)),
+        url ? h('img', { src: url, alt: '' }) : h('span.job-ph', icon(/\.(mp3|m4a|wav)$/i.test(job.videos?.[0]?.name || '') ? 'music' : 'film', 30)),
         job.summary?.duration ? h('span.job-dur', formatTime(job.summary.duration)) : null),
       h('div.job-body',
         h('div.job-head', name,
@@ -165,10 +165,10 @@ export function mount(root, app) {
       clear(wrap, h('div.home-empty',
         h('img.home-logo', { src: './icons/icon.svg', alt: '', width: 120, height: 120 }),
         h('h1', 'ClipCut'),
-        h('p.lede', 'ตัดช่วงที่ไม่ต้องการออกจากวิดีโอ ต่อหลายไฟล์เป็นไฟล์เดียว หรือแบ่งเป็นหลายตอน'),
+        h('p.lede', 'ตัดช่วงที่ไม่ต้องการออกจากวิดีโอหรือไฟล์เสียง ต่อหลายไฟล์เป็นไฟล์เดียว หรือแบ่งเป็นหลายตอน'),
         newJobCard(true),
         h('ol.home-steps',
-          h('li', h('span.n', '1'), h('div', h('strong', 'เปิดวิดีโอ'), h('p', 'พร้อม transcript ถ้ามี'))),
+          h('li', h('span.n', '1'), h('div', h('strong', 'เปิดวิดีโอหรือไฟล์เสียง'), h('p', 'พร้อม transcript ถ้ามี'))),
           h('li', h('span.n', '2'), h('div', h('strong', 'ตรวจจุดตัด'), h('p', 'แอปเสนอช่วงพักและช่วงเงียบ คุณเลือกทิ้งหรือเก็บ'))),
           h('li', h('span.n', '3'), h('div', h('strong', 'ส่งออก'), h('p', 'ได้ไฟล์ใหม่ข้างไฟล์ต้นฉบับ')))),
         privacy()));
