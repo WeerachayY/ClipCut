@@ -5,7 +5,7 @@
 
 | ชนิด | โฟลเดอร์ | ใช้ทำ | ตัวอย่างที่มีแล้ว |
 |---|---|---|---|
-| วิธีส่งออก | `export/` | สร้างไฟล์วิดีโอผลลัพธ์ | ไม่บีบอัด, บีบอัด H.264 |
+| วิธีส่งออก | `export/` | สร้างไฟล์วิดีโอผลลัพธ์ | ไม่บีบอัด, การ์ดจอ, บีบอัด H.264, เฉพาะเสียง |
 | ไฟล์ที่ได้เพิ่ม | `extras/` | ไฟล์ข้าง ๆ วิดีโอที่ส่งออก | สรุปการตัด .txt, คำบรรยาย .srt |
 | ตัวหาจุดตัด | `detectors/` | เสนอช่วงที่ควรตัด | ช่องว่างใน transcript, คำบอกเบรก, เสียงเงียบ |
 | ข้อมูลจากสื่อ | `layers/` | วัดค่าจากวิดีโอครั้งเดียว เก็บไว้กับงาน | คลื่นเสียง |
@@ -50,6 +50,18 @@
 
 แผนส่งออกมาจาก `buildPlan` (โหมดตัดช่วงทิ้ง) หรือ `buildClipPlan` (โหมดเลือกและเรียงชิ้น) ใน `js/core/plan.js`
 ทั้งสองคืนรูปเดียวกัน วิธีส่งออกและไฟล์ที่ได้เพิ่มจึงใช้ได้กับทั้งสองโหมดโดยไม่ต้องรู้ว่าเป็นโหมดไหน
+
+**สิ่งที่แต่งไว้ในขั้น “แต่ง”** บอกวิธีส่งออกด้วย 3 ฟิลด์:
+
+```js
+  handles: ['audio', 'speed', 'visual'], // ทำอะไรที่แต่งไว้ได้บ้าง: เพลง/ระดับเสียง, ความเร็ว, ข้อความ/ภาพซ้อน
+                                         // ไม่ใส่ = ไม่ได้สักอย่าง → ปุ่มถูกปิดพร้อมเหตุผลเมื่องานมีสิ่งนั้น
+  render: 'gpu' | 'audio',               // เมื่อมีสิ่งที่แต่ง: เรนเดอร์ด้วย js/render/export-program.js ทางไหน
+                                         // ไม่ใส่ (แต่ handles มี 'audio') = copy-mix: คัดลอกภาพเดิม ผสมเสียงใหม่
+  renderOnly: true,                      // ผ่าน export-program.js เสมอ แม้ไม่ได้แต่งอะไร (buildArgs จึงไม่ถูกเรียก)
+```
+
+แอปเลือกวิธีส่งออกที่ทำได้ให้เองถ้าวิธีที่ผู้ใช้เลือกไว้ทำไม่ได้ (`current()` ใน `js/ui/screen-export.js`)
 
 ### ตัวอย่าง: ปรับเสียงให้ดังเท่ากันทั้งไฟล์ (ภาพไม่ encode ใหม่ จึงยังเร็ว)
 
@@ -259,13 +271,63 @@ export default {
 
 ---
 
+## 4. ขั้น “แต่ง”: program, composition และการเรนเดอร์
+
+```
+plan (core/plan.js)  →  program (core/program.js)  →  เสียง: core/audiograph.js (ffmpeg)
+  ชิ้นที่เก็บ ลำดับ       + ความเร็วของแต่ละชิ้น           ภาพ: render/draw.js → render/gpu.js (WebCodecs)
+                         = เวลาของผลลัพธ์
+compose (core/compose.js): แทร็กและคลิปบนเวลาของผลลัพธ์ เก็บใน store.compose
+```
+
+- **program** คือแผนส่งออกบนนาฬิกาของผลลัพธ์ `buildProgram(plan, { pieces, speed })` แต่ละ segment มี `map`
+  (จาก `speedMap` ใน `core/speed.js`) แปลงเวลาไป-กลับระหว่างต้นฉบับกับผลลัพธ์ `locate(program, T)` บอกว่าเวลา T
+  ของผลลัพธ์มาจากไฟล์ไหน วินาทีที่เท่าไร `toProgram(program, g)` ทำกลับกัน ใช้ใน `app.program()`
+- **compose** = `{ tracks, clips, speed, mainVolume }` ฟังก์ชันแก้ไขทั้งหมดเป็นฟังก์ชันล้วน (คืน object ใหม่)
+  เช่น `addClip`, `moveClip`, `trimClip`, `splitClip`, `updateClip`, `setSpeed` UI เรียก `app.commitCompose(next)`
+  ซึ่งทำ undo ให้ (ส่ง `{ live: true }` ระหว่างลาก แล้ว `app.endComposeDrag()` ตอนปล่อย = ย้อนกลับได้ในครั้งเดียว)
+- **ภาพหนึ่งเฟรม** วาดโดย `drawFrame()` ใน `js/render/draw.js` ทั้งภาพตัวอย่าง (`js/ui/program-player.js`)
+  และตอนส่งออก (`js/render/gpu.js`) สิ่งที่เห็นจึงตรงกับไฟล์ที่ได้
+
+### ตัวอย่าง: แบบข้อความใหม่
+
+เพิ่ม object ใน `TEXT_PRESETS` (`js/core/compose.js`) ปุ่มในเมนูและแผงขวาสร้างให้เอง
+
+```js
+{ id: 'quote', label: 'คำพูดเด่น', text: '“…”', duration: 4,
+  style: { font: 'Plex Thai', weight: 700, size: 0.06, color: '#FFFFFF', bg: 'box', bgColor: 'rgba(0,0,0,0.55)', align: 'center' },
+  box: { x: 0.5, y: 0.5, w: 0.8 }, anim: { in: 'fade', out: 'fade', dur: 0.4 } },
+```
+
+ขนาดและตำแหน่งเป็นสัดส่วนของภาพ (0–1) จึงออกมาเหมือนกันทุกความละเอียด
+การเคลื่อนไหวแบบใหม่เพิ่มใน `ANIMS_IN` / `ANIMS_OUT` แล้ววาดใน `drawTextClip()` (`js/render/text.js`)
+
+### ตัวอย่าง: เส้นโค้งความเร็วแบบใหม่
+
+เพิ่มใน `CURVES` (`js/core/speed.js`): `points` คือ `[ตำแหน่งในชิ้น 0–1, ความเร็ว 0.1–10]` ต่อกันด้วยเส้นตรง
+
+```js
+{ id: 'ramp-up', label: 'เร่งขึ้น', hint: 'ช้าแล้วค่อย ๆ เร็ว', points: [[0, 0.5], [1, 3]] },
+```
+
+### คลิปชนิดใหม่ (เช่น สติกเกอร์ หรือ shape)
+
+1. ใส่ชนิดใน `LANE` (`core/compose.js`) ว่าอยู่แทร็กภาพ (`overlay`) หรือเสียง (`audio`)
+2. วาดใน `drawFrame()` (`render/draw.js`) — export ใช้ฟังก์ชันเดียวกัน จึงได้ทั้งตัวอย่างและไฟล์ผลลัพธ์
+3. ถ้ามีเสียง เพิ่มใน `partAudioArgs()` (`core/audiograph.js`)
+4. แผงปรับค่าใน `renderSide()` ของ `js/ui/screen-compose.js` และสีบน timeline ใน `KIND_COLOR` (`js/ui/compose-timeline.js`)
+
+---
+
 ## จุดอื่นที่อาจอยากแก้
 
 | อยากได้ | แก้ที่ |
 |---|---|
 | คำบอกเบรกเพิ่ม | ค่าเริ่มต้นใน `js/plugins/detectors/keywords.js` (ผู้ใช้ก็แก้เองได้ในหน้า “ตรวจไฟล์”) |
 | ชื่อไฟล์ผลลัพธ์ | `partFileName` ใน `js/media/export.js` |
-| ระยะฟังรอยต่อ / ปุ่มลัด | `js/ui/screen-review.js` |
+| ระยะฟังรอยต่อ / ปุ่มลัด | `js/ui/screen-review.js` (หน้าแต่ง: `js/ui/screen-compose.js`) |
+| ระดับการลดเสียงเพลง | `DUCK` ใน `js/core/compose.js` (export ใช้ `ratio`, ภาพตัวอย่างใช้ `gain`) |
+| ฟอนต์ของข้อความ | `FONTS` ใน `js/core/compose.js` + `@font-face` ใน `css/app.css` + ไฟล์ใน `vendor/fonts/` |
 | สี/ฟอนต์ | ตัวแปรบนสุดของ `css/app.css` |
 | รองรับวิดีโอนามสกุลอื่น | `VIDEO_EXT` ใน `js/io/folder.js` (keyframe อ่านได้เฉพาะ MP4/MOV; นามสกุลอื่นจะตัดตรงเวลาแต่ภาพอาจกระตุก) |
 

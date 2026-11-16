@@ -3,6 +3,8 @@ const ENCODERS = { mp3: ['-c:a', 'libmp3lame'], m4a: ['-c:a', 'aac'], wav: ['-c:
 export default {
   id: 'audio-exact',
   media: 'audio',
+  render: 'audio',
+  handles: ['audio', 'speed', 'visual'],
   label: 'ตัดตรงจุดเป๊ะ (เข้ารหัสใหม่)',
   description: 'จุดตัดตรงระดับ sample ใช้เวลามากกว่าเล็กน้อย mp3 และ m4a ถูกเข้ารหัสอีกรอบ คุณภาพลดลงเล็กน้อยตาม bitrate ที่เลือก',
   speed: 'slow',

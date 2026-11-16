@@ -130,7 +130,9 @@ export function mount(root, app) {
   const nextBar = h('div.next-bar',
     h('button.ghost', { type: 'button', onclick: () => app.go('files') }, icon('arrowLeft', 16), 'ตรวจไฟล์'),
     summary,
-    h('button.primary', { type: 'button', onclick: () => app.go('export') }, 'ไปขั้นส่งออก', icon('arrowRight', 16)));
+    h('div.next-right',
+      h('button.ghost', { type: 'button', onclick: () => app.go('export'), 'data-tip': 'ไม่ต้องแต่ง ส่งออกเลย' }, 'ข้ามไปส่งออก'),
+      h('button.primary', { type: 'button', onclick: () => app.go('compose') }, 'ไปขั้นแต่ง', icon('arrowRight', 16))));
 
   root.append(h('section.review',
     h('div.rv-main', h(`div.player-wrap${audioOnly ? '.audio' : ''}`, video, audioOnly ? h('div.audio-card', icon('music', 22), h('span', tl.files.map((f) => f.name).join(' + '))) : null, fileTag), transport, timelineView.el),

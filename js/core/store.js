@@ -2,6 +2,7 @@
 // Video File objects and folder handles live only in memory; the project file stores
 // names, sizes and every decision so work can be resumed later.
 import { emptyArrange } from './arrange.js';
+import { emptyCompose } from './compose.js';
 import { defaultDetectorSettings } from './registry.js';
 import { emptyEdit, fromLegacy } from './cuts.js';
 export { newId } from './id.js';
@@ -31,6 +32,7 @@ export function initialState() {
     exportOptions: {},
     exportExtras: {},        // {extraId: {on, ...options}} for side files such as captions
     arrange: emptyArrange(), // "pick and arrange pieces" mode of the export step (core/arrange.js)
+    compose: emptyCompose(), // overlays, music and speeds of step "แต่ง" (core/compose.js)
     outputBase: '',
     selection: null,         // {type:'piece', key} | {type:'mark', id}
     savedAt: null,
@@ -74,6 +76,7 @@ export function serializeProject(s) {
     exportOptions: s.exportOptions,
     exportExtras: s.exportExtras,
     arrange: s.arrange,
+    compose: s.compose,
     outputBase: s.outputBase,
   };
 }
@@ -106,6 +109,7 @@ export function restoreProject(saved, videos) {
     exportOptions: saved.exportOptions || {},
     exportExtras: saved.exportExtras || {},
     arrange: { ...emptyArrange(), ...(saved.arrange || {}) },
+    compose: { ...emptyCompose(), ...(saved.compose || {}) },
     outputBase: saved.outputBase || '',
   };
 }

@@ -20,19 +20,28 @@ import * as homeScreen from './ui/screen-home.js';
 import * as filesScreen from './ui/screen-files.js';
 import * as reviewScreen from './ui/screen-review.js';
 import * as exportScreen from './ui/screen-export.js';
+import * as composeScreen from './ui/screen-compose.js';
+import { AssetLibrary } from './render/assets.js';
+import { buildPlan, buildClipPlan } from './core/plan.js';
+import { buildProgram } from './core/program.js';
+import { emptyArrange, clipList } from './core/arrange.js';
+import { piecesOf } from './core/cuts.js';
 
 const store = createStore();
-const SCREENS = { home: homeScreen, files: filesScreen, review: reviewScreen, export: exportScreen };
+const SCREENS = { home: homeScreen, files: filesScreen, review: reviewScreen, compose: composeScreen, export: exportScreen };
 const STEPS = [
   { id: 'files', label: 'ไฟล์' },
-  { id: 'review', label: 'ตรวจจุดตัด' },
+  { id: 'review', label: 'ตัด' },
+  { id: 'compose', label: 'แต่ง' },
   { id: 'export', label: 'ส่งออก' },
 ];
 
 let tlCache = { key: null, tl: null };
-// undo/redo history of the edit (cut points + piece states)
+// undo/redo history of the work: cut points + piece states, and the composition (step "แต่ง")
 const history = { past: [], future: [] };
+const snap = () => { const s = store.get(); return { edit: s.edit, compose: s.compose }; };
 const HISTORY_MAX = 200;
+let composeDrag = false;
 const app = {
   store,
 
@@ -217,15 +226,22 @@ const app = {
 
       // the transcript saved with the job first, otherwise the best candidate among the files
       if (rec.transcript) store.set({ transcript: rec.transcript });
-      if (rec.layers) store.set({ layers: rec.layers });
       else for (const t of c.transcripts) { if (await app.setTranscript(t, { quiet: true })) break; }
+      if (rec.layers) store.set({ layers: rec.layers });
+      // media added in step "แต่ง" (kept in this browser)
+      app.assets.dispose();
+      const assetIds = [...new Set((rec.project?.compose?.clips || []).map((x) => x.asset).filter(Boolean))];
+      if (assetIds.length) {
+        const missing = await app.assets.load(assetIds);
+        if (missing.length) toast(`หาไฟล์ที่ใส่ไว้ในขั้นแต่งไม่เจอ ${missing.length} ไฟล์ (เลือกไฟล์อีกครั้งได้ในขั้นแต่ง)`, 'error', 9000);
+      }
 
       let step = 'files';
       const restored = rec.project ? restoreProject(rec.project, videos) : null;
       if (restored) {
         store.set(restored);
         const canReview = restored.edit.marks.length > 0 || !!restored.analysisKey;
-        step = canReview && (rec.step === 'review' || rec.step === 'export') ? rec.step : canReview ? 'review' : 'files';
+        step = canReview && ['review', 'compose', 'export'].includes(rec.step) ? rec.step : canReview ? 'review' : 'files';
       }
       const s = store.get();
       job = { ...rec, source: { kind: source.kind, name: source.name }, openedAt: Date.now(), missing: false, videos: s.videos.map(videoFacts) };
@@ -264,8 +280,12 @@ const app = {
       if (!ok) return;
       ffmpeg.cancel();
     }
-    await saveJob();
+    const saved = await saveJob();
     for (const v of store.get().videos) URL.revokeObjectURL(v.url);
+    app.assets.dispose();
+    // media taken out of the composition (and not used by another job) is deleted from this browser;
+    // only once the job is safely saved, so nothing it still uses can go
+    if (saved) jobsDb.pruneAssets().catch((e) => console.warn('assets', e));
     job = null;
     history.past = [];
     history.future = [];
@@ -292,7 +312,10 @@ const app = {
   },
 
   /** Removes the job from this browser's list only. Videos, exports and the folder's project file stay. */
-  async removeJob(rec) { await jobsDb.deleteJob(rec.id); },
+  async removeJob(rec) {
+    await jobsDb.deleteJob(rec.id);
+    await jobsDb.pruneAssets().catch((e) => console.warn('assets', e));
+  },
 
   /** The job's work as a file, to keep a copy or move it to another computer. */
   downloadJobFile(rec) {
@@ -453,21 +476,40 @@ const app = {
   commitEdit(next, extra = {}) {
     const cur = store.get().edit;
     if (next === cur) { if (Object.keys(extra).length) store.set(extra); return; }
-    history.past.push(cur);
+    history.past.push(snap());
     if (history.past.length > HISTORY_MAX) history.past.shift();
     history.future = [];
     store.set({ edit: next, ...extra });
   },
+  /**
+   * Replace the composition. `live` = while dragging: shown at once, but only the state before the drag is
+   * remembered for undo (call again without `live` when the drag ends).
+   */
+  commitCompose(next, extra = {}, { live = false } = {}) {
+    const cur = store.get().compose;
+    if (next === cur) { if (Object.keys(extra).length) store.set(extra); return; }
+    if (!composeDrag) {
+      history.past.push(snap());
+      if (history.past.length > HISTORY_MAX) history.past.shift();
+      history.future = [];
+    }
+    composeDrag = live;
+    store.set({ compose: next, ...extra });
+  },
+  /** End of a drag that had no final change. */
+  endComposeDrag() { composeDrag = false; },
   undo() {
     if (!history.past.length) return false;
-    history.future.push(store.get().edit);
-    store.set({ edit: history.past.pop() });
+    composeDrag = false;
+    history.future.push(snap());
+    store.set(history.past.pop());
     return true;
   },
   redo() {
     if (!history.future.length) return false;
-    history.past.push(store.get().edit);
-    store.set({ edit: history.future.pop() });
+    composeDrag = false;
+    history.past.push(snap());
+    store.set(history.future.pop());
     return true;
   },
   canUndo: () => history.past.length > 0,
@@ -475,6 +517,29 @@ const app = {
 
   /** Cut ranges and split points for the export plan. */
   planInput() { return toPlanInput(store.get().edit, app.timeline().duration); },
+
+  /** Media added in step "แต่ง" (music, pictures, overlay video) for the open job. */
+  assets: new AssetLibrary(),
+
+  /** What will be exported, as cut and arranged: plan of parts (core/plan.js). snap = keyframe-aligned (lossless copy). */
+  plan({ snap = false } = {}) {
+    const s = store.get();
+    const tl = app.timeline();
+    const arrange = { ...emptyArrange(), ...(s.arrange || {}) };
+    if (arrange.mode === 'clips') {
+      const clips = clipList(arrange, piecesOf(s.edit, tl.duration)).filter((c) => c.on);
+      return buildClipPlan(tl, clips, { snap, joined: arrange.output === 'joined' });
+    }
+    const { cuts, splits } = toPlanInput(s.edit, tl.duration);
+    return buildPlan(tl, cuts, splits, { snap });
+  },
+
+  /** The program: the plan on its own clock with every piece's speed (core/program.js). */
+  program({ snap = false, speed = true } = {}) {
+    const s = store.get();
+    const plan = app.plan({ snap });
+    return { plan, program: buildProgram(plan, { pieces: piecesOf(s.edit, app.timeline().duration), speed: speed ? s.compose?.speed || {} : {} }) };
+  },
 
   /** Write the open job now (normally autosaved). */
   saveNow() { return saveJob(); },
@@ -492,7 +557,7 @@ let warnedStorage = false;
 let warnedSave = false;
 const videoFacts = (v) => ({ name: v.name, size: v.size, duration: v.duration || 0, fps: v.fps || null });
 // state that is part of the work; changes to all but `analysis` count as edits (for "แก้หลังส่งออก")
-const PERSISTED = ['videos', 'transcript', 'anchors', 'anchorMode', 'analysis', 'layers', 'edit', 'detectorSettings', 'exportProfile', 'exportOptions', 'exportExtras', 'arrange', 'outputBase'];
+const PERSISTED = ['videos', 'transcript', 'anchors', 'anchorMode', 'analysis', 'layers', 'edit', 'detectorSettings', 'exportProfile', 'exportOptions', 'exportExtras', 'arrange', 'compose', 'outputBase'];
 const NOT_EDITS = new Set(['analysis', 'layers']);
 let snapshot = null;
 let lastStep = null;
@@ -517,11 +582,12 @@ store.subscribe((s) => {
   saveTimer = setTimeout(saveJob, 500);
 });
 
+/** @returns {Promise<boolean>} whether the job list in this browser has the work as it is now */
 async function saveJob() {
   clearTimeout(saveTimer);
   saveTimer = 0;
   const s = store.get();
-  if (!job || s.jobId !== job.id) return;
+  if (!job || s.jobId !== job.id) return false;
   const project = serializeProject(s);
   job = {
     ...job,
@@ -533,9 +599,11 @@ async function saveJob() {
     layers: s.layers || {},
     summary: jobSummary(s),
   };
+  let saved = true;
   try {
     await jobsDb.putJob(job);
   } catch (e) {
+    saved = false;
     console.warn('save job', e);
     if (!warnedSave) { warnedSave = true; toast(`บันทึกงานไม่สำเร็จ: ${e.message}`, 'error', 9000); }
   }
@@ -544,6 +612,7 @@ async function saveJob() {
     await writeFileTo(s.source.dir, PROJECT_FILE, JSON.stringify(project, null, 1)).catch((e) => console.warn('project file', e));
   }
   if (store.get().jobId === job.id) store.set({ savedAt: new Date() });
+  return saved;
 }
 
 // save before the page goes away (IndexedDB usually finishes in time)
@@ -564,10 +633,12 @@ function showHelp() {
       h('h3', 'งานถูกเก็บไว้ที่ไหน'),
       h('p', 'รายการงานเก็บใน browser เครื่องนี้ ไม่คัดลอกวิดีโอ งานที่เปิดจากโฟลเดอร์จะมีไฟล์ clipcut.project.json ในโฟลเดอร์นั้นด้วย เปิดโฟลเดอร์เดิมบนเครื่องอื่นก็ทำต่อได้ ผลลัพธ์อยู่ในโฟลเดอร์ output'),
       h('p', 'Edge และ Chrome บนคอมพิวเตอร์จำตำแหน่งไฟล์ได้ คลิกงานแล้วกดอนุญาตก็เปิดต่อได้ทันที browser อื่นต้องเลือกไฟล์เดิมอีกครั้ง'),
+      h('h3', 'แต่งวิดีโอ'),
+      h('p', 'หลังตัดเสร็จ ขั้น “แต่ง” ใส่ข้อความ hook โลโก้ วิดีโอซ้อน เพลงประกอบที่เบาลงเองตอนมีคนพูด และปรับความเร็วเป็นช่วง ๆ ได้ แล้วส่งออกด้วยการ์ดจอ ไม่ต้องแต่งก็ข้ามไปส่งออกได้'),
       h('h3', 'ไฟล์ไม่ออกจากเครื่อง'),
       h('p', 'ทุกอย่างประมวลผลใน browser บนคอมพิวเตอร์นี้ ไม่มีการอัปโหลดและไม่ใช้ AI'),
       h('h3', 'ปุ่มลัด'),
-      h('p', 'กด ', h('kbd', '?'), ' ในหน้าตรวจจุดตัดเพื่อดูปุ่มลัดทั้งหมด')),
+      h('p', 'กด ', h('kbd', '?'), ' ในหน้าตัดหรือหน้าแต่งเพื่อดูปุ่มลัดทั้งหมด')),
     buttons: [{ label: 'ปิด', value: true, kind: 'primary' }],
   });
 }

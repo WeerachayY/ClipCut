@@ -6,7 +6,7 @@ export default {
   label: 'สรุปการตัด (.txt)',
   description: 'ช่วงที่ตัดออกและที่มาของแต่ละไฟล์ เก็บไว้อ้างอิงหรือใช้ทำสารบัญ',
   defaultOn: true,
-  build({ plan, timeline, names, fileBase }) {
+  build({ plan, program, timeline, names, fileBase }) {
     const L = [];
     L.push(`ClipCut — สรุปการตัด (${new Date().toLocaleString('th-TH')})`);
     L.push(`ต้นฉบับ: ${timeline.files.map((f) => f.name).join(' + ')} (${formatTime(timeline.duration)})`);
@@ -16,7 +16,9 @@ export default {
     plan.removed.forEach((r, i) => L.push(`  ${i + 1}. ${formatTime(r.start)} – ${formatTime(r.end)} (${formatDuration(r.end - r.start)})`));
     L.push('');
     L.push('ไฟล์ผลลัพธ์:');
-    plan.parts.forEach((p, i) => L.push(`  ${names[i]}  ความยาว ${formatTime(p.duration)}  มาจาก ${formatTime(p.from)} – ${formatTime(p.to)}`));
+    // with speed changes (step "แต่ง") the files are as long as the program, not the plain plan
+    plan.parts.forEach((p, i) => L.push(`  ${names[i]}  ความยาว ${formatTime((program || plan).parts[i]?.duration ?? p.duration)}  มาจาก ${formatTime(p.from)} – ${formatTime(p.to)}`));
+    if (program) L.push('', `ปรับความเร็วบางช่วงไว้ ความยาวรวม ${formatTime(program.duration)} (ก่อนปรับ ${formatTime(plan.keptDuration)})`);
     return [{ name: `${fileBase}_สรุปการตัด.txt`, data: L.join('\r\n') }];
   },
 };

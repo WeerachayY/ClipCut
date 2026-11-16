@@ -14,6 +14,8 @@ import copy from './export/copy.js';
 import compressH264 from './export/compress-h264.js';
 import audioCopy from './export/audio-copy.js';
 import audioExact from './export/audio-exact.js';
+import gpuH264 from './export/gpu-h264.js';
+import audioOut from './export/audio-out.js';
 
 import report from './extras/report.js';
 import srt from './extras/srt.js';
@@ -32,7 +34,9 @@ registerDetector(keywords);
 registerDetector(silence);
 
 registerExportProfile(copy);
+registerExportProfile(gpuH264);
 registerExportProfile(compressH264);
+registerExportProfile(audioOut);
 registerExportProfile(audioCopy);
 registerExportProfile(audioExact);
 

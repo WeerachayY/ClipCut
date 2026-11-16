@@ -1,5 +1,6 @@
 // Lossless: copies the original video/audio packets. Seconds per hour of video, same quality and bitrate.
 export default {
+  handles: ['audio'], // music and volume: the picture is still copied, only the sound is mixed again
   id: 'copy',
   label: 'ไม่บีบอัด (แนะนำ)',
   description: 'เร็วมาก คุณภาพและขนาดต่อนาทีเท่าต้นฉบับ จุดตัดถูกปรับให้ตรง keyframe',

@@ -8,7 +8,7 @@ export const MAX_OUTPUT_BYTES = 1.9 * 1024 ** 3; // browser memory ceiling for o
 export const safeName = (s) => String(s).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 80);
 
 /** Output file extension of a profile for this timeline (audio profiles follow the source format). */
-export const outputExtension = (profile, timeline) => (typeof profile.outputExtension === 'function' ? profile.outputExtension(timeline) : profile.outputExtension) || 'mp4';
+export const outputExtension = (profile, timeline, options = {}) => (typeof profile.outputExtension === 'function' ? profile.outputExtension(timeline, options) : profile.outputExtension) || 'mp4';
 
 /** Export profiles that fit this timeline (video or audio job). */
 export const profilesFor = (profiles, timeline) => profiles.filter((p) => (p.media || 'video') === timeline.kind);

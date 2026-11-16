@@ -81,7 +81,7 @@ test('audio jobs: files, profiles, extension, clock', () => {
   const video = new Timeline([{ id: 'v', name: 'v.mp4', duration: 10 }]);
   assert.deepEqual([audio.kind, audio.ext, video.kind], ['audio', 'm4a', 'video']);
   assert.deepEqual(profilesFor(exportProfiles(), audio).map((p) => p.id), ['audio-copy', 'audio-exact']);
-  assert.deepEqual(profilesFor(exportProfiles(), video).map((p) => p.id), ['copy', 'compress-h264']);
+  assert.deepEqual(profilesFor(exportProfiles(), video).map((p) => p.id), ['copy', 'gpu-h264', 'compress-h264', 'audio-out']);
   assert.equal(outputExtension(getExportProfile('audio-copy'), audio), 'm4a');
   assert.equal(outputExtension(getExportProfile('copy'), video), 'mp4');
   const seg = { fileIndex: 0, inpoint: 30, outpoint: 40.5, duration: 10.5 };

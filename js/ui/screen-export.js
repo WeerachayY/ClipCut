@@ -2,8 +2,11 @@ import { h, clear, icon, toast } from './dom.js';
 import { exportProfiles, exportExtras } from '../core/registry.js';
 import { mapLines } from '../core/analysis.js';
 import { lineSpans } from '../core/textedit.js';
-import { buildPlan, buildClipPlan, estimatePartBytes } from '../core/plan.js';
-import { counts, piecesOf, toPlanInput } from '../core/cuts.js';
+import { estimatePartBytes } from '../core/plan.js';
+import { counts, piecesOf } from '../core/cuts.js';
+import { summary as composeSummary } from '../core/compose.js';
+import { exportProgram, needsOf } from '../render/export-program.js';
+import { gpuSupport } from '../render/gpu.js';
 import { emptyArrange, clipList, moveClip, setClipOn, setClipName, resetOrder, isReordered } from '../core/arrange.js';
 import { formatTime, formatBytes, formatDuration, formatClockMs } from '../core/time.js';
 import { runExport, partFileName, safeName, outputExtension, profilesFor, MAX_OUTPUT_BYTES } from '../media/export.js';
@@ -17,17 +20,28 @@ function defaultBase(videos) {
 
 const MIME = { mp4: 'video/mp4', mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', txt: 'text/plain', srt: 'application/x-subrip' };
 
-/** The export profile in use (one that fits this job: video or audio) and what will be made with it. */
-function current(st, tl) {
+const NEED_LABEL = { audio: 'เพลงและระดับเสียง', speed: 'ความเร็ว', visual: 'ข้อความและภาพซ้อน' };
+
+/** Options of a profile: its defaults, then what the user picked for it. */
+const optionsOf = (st, profile) => ({ ...Object.fromEntries((profile.options || []).map((x) => [x.key, x.default])), ...(st.exportProfile === profile.id ? st.exportOptions || {} : {}) });
+
+/**
+ * The export profile in use (one that fits this job: video or audio, and what was made in step "แต่ง")
+ * and what will be made with it. `viaProgram` = rendered by render/export-program.js.
+ */
+function current(st, tl, app) {
   const profs = profilesFor(exportProfiles(), tl);
-  const profile = profs.find((p) => p.id === st.exportProfile) || profs[0];
+  const needs = needsOf(st.compose, app.program().program, tl.kind);
+  const fits = (p) => needs.every((n) => (p.handles || []).includes(n));
+  const wanted = profs.find((p) => p.id === st.exportProfile);
+  const profile = wanted && fits(wanted) ? wanted : profs.find(fits) || profs[0];
   const snap = profile.snapToKeyframes !== false;
+  const { plan, program } = app.program({ snap });
   const arrange = { ...emptyArrange(), ...(st.arrange || {}) };
   const clips = clipList(arrange, piecesOf(st.edit, tl.duration));
-  let plan;
-  if (arrange.mode === 'clips') plan = buildClipPlan(tl, clips.filter((c) => c.on), { snap, joined: arrange.output === 'joined' });
-  else { const { cuts, splits } = toPlanInput(st.edit, tl.duration); plan = buildPlan(tl, cuts, splits, { snap }); }
-  return { profs, profile, plan, arrange, clips, ext: outputExtension(profile, tl) };
+  const viaProgram = needs.length > 0 || !!profile.renderOnly;
+  const options = optionsOf(st, profile);
+  return { profs, profile, plan, program, needs, fits, viaProgram, options, arrange, clips, ext: outputExtension(profile, tl, options) };
 }
 
 /** Side files (captions, report…): which are on, with their options. */
@@ -49,26 +63,51 @@ export function mount(root, app) {
   let progress = null;
   let error = null;
   let blobUrls = [];
+  let signal = null;
+  let gpu = null; // {ok, reason} once checked
+  // only the GPU profile shows the answer, so only it is drawn again (a click elsewhere must not land on a replaced button)
+  gpuSupport().then((r) => { gpu = r; if (!running && current(store.get(), app.timeline(), app).profile.render === 'gpu') render(); }).catch(() => {});
 
   function optionsForm(profile) {
     const st = store.get();
     const o = st.exportProfile === profile.id ? st.exportOptions : {};
+    // the profile shown may have been picked for the user (what was made in "แต่ง"): choosing an option keeps it
+    const pick = (key, value) => store.set(store.get().exportProfile === profile.id
+      ? { exportOptions: { ...store.get().exportOptions, [key]: value } }
+      : { exportProfile: profile.id, exportOptions: { [key]: value } });
     return (profile.options || []).map((opt) => h('label.field',
       h('span', opt.label),
-      h('select', { disabled: running, onchange: (e) => store.set({ exportOptions: { ...store.get().exportOptions, [opt.key]: e.target.value } }) },
+      h('select', { disabled: running, onchange: (e) => pick(opt.key, e.target.value) },
         opt.choices.map((c) => h('option', { value: c.value, selected: (o[opt.key] ?? opt.default) === c.value }, c.label)))));
   }
 
+  let settling = null; // end of the last run, clean-up included (a cancelled render stops at its next frame)
   async function start() {
+    // the message of the last run goes at once; the button was pressed
+    error = null;
+    results = null;
+    render();
     const st = store.get();
     const tl = app.timeline();
-    const { profile, plan } = current(st, tl);
+    const { profile, plan, program, viaProgram, options, needs } = current(st, tl, app);
+    if (profile.render === 'gpu' && gpu && !gpu.ok) { error = gpu.reason; render(); return; }
     const base = st.outputBase || defaultBase(st.videos);
     let writeOutput;
     let where;
+    let openOutput = null;
+    const opened = [];
+    let outDir = null;
     if (st.source?.kind === 'folder' && await ensureWritable(st.source.dir).catch(() => false)) {
       const out = await outputDir(st.source.dir);
+      outDir = out;
       writeOutput = (name, data) => writeFileTo(out, name, data);
+      // rendered video goes straight to disk as it is made (no size limit from memory)
+      openOutput = async (name) => {
+        const fh = await out.getFileHandle(name, { create: true });
+        const writable = await fh.createWritable();
+        opened.push({ name, writable });
+        return { writable, size: async () => (await fh.getFile()).size };
+      };
       where = `โฟลเดอร์ ${st.source.name}/output`;
     } else {
       // No folder: keep results in memory and let the user click to save each one
@@ -81,17 +120,29 @@ export function mount(root, app) {
       };
       where = null;
     }
+    // pressed again right after "ยกเลิก": let the old run finish removing its half file first
+    // (same file name), and not reset this run's state when it ends
+    if (settling) {
+      progress = { message: 'รอให้การส่งออกครั้งก่อนหยุด…', ratio: 0, part: 0, parts: 1 };
+      renderProgress();
+      await settling;
+    }
+    let settle;
+    settling = new Promise((r) => { settle = r; });
     running = true; app.exporting = true; results = null; error = null; progress = { message: 'เริ่ม…', ratio: 0, part: 0, parts: plan.parts.length };
+    signal = { aborted: false };
     render();
     try {
-      const res = await runExport({
-        plan, timeline: tl, files: st.videos.map((v) => v.file), profile,
-        options: { ...Object.fromEntries((profile.options || []).map((x) => [x.key, x.default])), ...(st.exportOptions || {}) },
-        outputBase: base, writeOutput,
-        onProgress: (p) => { progress = p; renderProgress(); },
-      });
+      const files = st.videos.map((v) => v.file);
+      const onProgress = (p) => { progress = p; renderProgress(); };
+      const res = viaProgram
+        ? await exportProgram({
+          mode: profile.render || 'copy-mix', program, plan, timeline: tl, files, compose: st.compose, assets: app.assets, profile, options,
+          outputBase: base, writeOutput, openOutput, onProgress, signal,
+        })
+        : await runExport({ plan, timeline: tl, files, profile, options, outputBase: base, writeOutput, onProgress });
       const names = res.map((r) => r.name);
-      const ctx = extrasContext(st, tl, plan, base, names);
+      const ctx = extrasContext(st, tl, plan, base, names, viaProgram && needs.includes('speed') ? program : null);
       const sideFiles = [];
       for (const ex of extrasState(st, ctx).filter((e) => e.on)) {
         for (const f of ex.x.build({ ...ctx, options: ex.options })) {
@@ -104,18 +155,27 @@ export function mount(root, app) {
       toast('ส่งออกเสร็จแล้ว', 'success');
       app.markExported();
     } catch (e) {
-      console.error(e);
-      error = running ? e.message : 'ยกเลิกแล้ว';
+      if (e.name !== 'AbortError') console.error(e);
+      error = running && e.name !== 'AbortError' ? e.message : 'ยกเลิกแล้ว ไฟล์ที่ยังสร้างไม่เสร็จจะไม่ถูกบันทึก';
+      // a video that was being written to the folder: do not leave half a file behind
+      for (const o of opened) {
+        await o.writable.abort?.().catch(() => {});
+        await outDir?.removeEntry(o.name).catch(() => {});
+      }
     } finally {
+      signal = null;
       running = false;
       app.exporting = false;
       progress = null;
+      settling = null;
+      settle();
       render();
     }
   }
 
   function cancel() {
     running = false;
+    if (signal) signal.aborted = true;
     ffmpeg.cancel();
     error = 'ยกเลิกแล้ว ไฟล์ที่ยังสร้างไม่เสร็จจะไม่ถูกบันทึก';
     render();
@@ -131,9 +191,10 @@ export function mount(root, app) {
       h('div.bar.on', h('div.bar-fill', { style: { width: `${Math.round((p.ratio || 0) * 100)}%` } })));
   }
 
-  function extrasContext(st, tl, plan, base, names) {
+  /** `program`: given when speed changes moved the times (captions follow the program, not the plain plan). */
+  function extrasContext(st, tl, plan, base, names, program = null) {
     const spans = st.transcript ? lineSpans(mapLines(st.transcript, st.anchors, st.anchorMode), tl.duration) : [];
-    return { plan, timeline: tl, base, fileBase: safeName(base) || 'video', names, spans, transcript: st.transcript };
+    return { plan, program, timeline: tl, base, fileBase: safeName(base) || 'video', names, spans, transcript: st.transcript };
   }
 
   function setExtra(id, patch) {
@@ -141,8 +202,8 @@ export function mount(root, app) {
     store.set({ exportExtras: { ...cur, [id]: { ...(cur[id] || {}), ...patch } } });
   }
 
-  function extrasForm(st, tl, plan, base, profile) {
-    const names = plan.parts.map((p) => partFileName(base, p, plan.parts.length, outputExtension(profile, tl)));
+  function extrasForm(st, tl, plan, base, profile, ext) {
+    const names = plan.parts.map((p) => partFileName(base, p, plan.parts.length, ext));
     const list = extrasState(st, extrasContext(st, tl, plan, base, names));
     if (!list.length) return null;
     return h('fieldset.extras', h('legend', 'ไฟล์ที่ได้เพิ่ม'),
@@ -212,7 +273,10 @@ export function mount(root, app) {
   function render() {
     const st = store.get();
     const tl = app.timeline();
-    const { profs, profile, plan, arrange, clips, ext } = current(st, tl);
+    const { profs, profile, plan, program, needs, fits, viaProgram, arrange, clips, ext } = current(st, tl, app);
+    const parts = viaProgram ? program.parts : plan.parts;
+    const outDuration = viaProgram ? program.duration : plan.keptDuration;
+    const made = composeSummary(st.compose);
     const clipMode = arrange.mode === 'clips';
     const audio = tl.kind === 'audio';
     const base = st.outputBase || defaultBase(st.videos);
@@ -228,7 +292,8 @@ export function mount(root, app) {
     if (clipMode && plan.snapped) warnings.push(h('p.hint', 'แบบไม่บีบอัด หัวของแต่ละชิ้นจะเริ่มที่ keyframe ก่อนจุดตัด จึงอาจมีภาพก่อนหน้าติดมา 1–2 วินาที เลือกแบบบีบอัดถ้าต้องการตรงจุดเป๊ะ'));
     if (!audio && !tl.hasKeyframes) warnings.push(h('p.warn', icon('alert', 16), 'อ่าน keyframe ของบางไฟล์ไม่ได้ ภาพอาจกระตุกสั้น ๆ ที่รอยตัด'));
     plan.warnings.forEach((w) => warnings.push(h('p.warn', icon('alert', 16), w.message)));
-    if (profile.speed === 'fast' && sizes.some((b) => b > MAX_OUTPUT_BYTES)) warnings.push(h('p.warn', icon('alert', 16), 'บางไฟล์ผลลัพธ์จะใหญ่เกิน ~1.9 GB ซึ่ง browser สร้างไม่ได้ เพิ่มจุดแบ่งไฟล์ในขั้นตรวจจุดตัด หรือเลือกแบบบีบอัด'));
+    if (profile.render === 'gpu' && gpu && !gpu.ok) warnings.push(h('p.warn', icon('alert', 16), gpu.reason));
+    if (profile.speed === 'fast' && !profile.render && sizes.some((b) => b > MAX_OUTPUT_BYTES)) warnings.push(h('p.warn', icon('alert', 16), 'บางไฟล์ผลลัพธ์จะใหญ่เกิน ~1.9 GB ซึ่ง browser สร้างไม่ได้ เพิ่มจุดแบ่งไฟล์ในขั้นตรวจจุดตัด หรือเลือกแบบบีบอัด'));
 
     clear(body,
       h('div.export-grid',
@@ -239,34 +304,46 @@ export function mount(root, app) {
             h('button', { type: 'button', role: 'tab', disabled: running, 'aria-selected': String(clipMode), onclick: () => setArrange({ mode: 'clips' }) }, 'เลือกและเรียงชิ้น')),
           clipMode ? clipsPanel(arrange, clips, tl) : null,
           h('div.result-head',
-            h('div', h('div.big-num', formatTime(plan.keptDuration)), h('div.hint', clipMode
+            h('div', h('div.big-num', formatTime(outDuration)), h('div.hint', clipMode
               ? `จาก ${formatTime(tl.duration)} · เลือก ${clips.filter((c) => c.on).length} จาก ${clips.length} ชิ้น${arrange.output === 'joined' && isReordered(clips) ? ' · เรียงลำดับใหม่' : ''}`
-              : `จาก ${formatTime(tl.duration)} · ตัดออก ${formatTime(plan.removedDuration)} (${plan.removed.length} ช่วง)`))),
+              : `จาก ${formatTime(tl.duration)} · ตัดออก ${formatTime(plan.removedDuration)} (${plan.removed.length} ช่วง)`),
+              needs.includes('speed') ? h('div.hint', `ความเร็วที่ตั้งไว้ทำให้ยาว ${formatTime(program.duration)} (ก่อนปรับ ${formatTime(plan.keptDuration)})`) : null)),
+          needs.length ? h('div.made',
+            h('span', 'ที่แต่งไว้: ', [made.text && `ข้อความ ${made.text}`, made.image && `ภาพ ${made.image}`, made.video && `วิดีโอซ้อน ${made.video}`, made.audio && `เสียง ${made.audio}`, made.speed && `ความเร็ว ${made.speed} ชิ้น`,
+              needs.includes('audio') && !made.audio && !made.video ? 'ระดับเสียง' : null].filter(Boolean).join(' · ')),
+            h('button.ghost.small', { type: 'button', disabled: running, onclick: () => app.go('compose') }, 'แก้')) : null,
           h('table.parts',
-            h('thead', h('tr', h('th', 'ไฟล์'), h('th', 'ความยาว'), h('th', profile.speed === 'fast' ? 'ขนาดประมาณ' : ''))),
-            h('tbody', plan.parts.map((p, i) => h('tr',
-              h('td', partFileName(base, p, plan.parts.length, ext)),
+            h('thead', h('tr', h('th', 'ไฟล์'), h('th', 'ความยาว'), h('th', profile.speed === 'fast' && !profile.render ? 'ขนาดประมาณ' : ''))),
+            h('tbody', parts.map((p, i) => h('tr',
+              h('td', partFileName(base, p, parts.length, ext)),
               h('td.tc', formatTime(p.duration)),
-              h('td.tc', profile.speed === 'fast' ? formatBytes(sizes[i]) : ''))))),
+              h('td.tc', profile.speed === 'fast' && !profile.render ? formatBytes(sizes[i]) : ''))))),
           warnings),
 
         h('section.panel',
           h('h2', 'วิธีสร้างไฟล์'),
-          h('div.profiles', profs.map((pr) => h(`label.profile${pr.id === profile.id ? '.chosen' : ''}`,
-            h('input', { type: 'radio', name: 'profile', value: pr.id, checked: pr.id === profile.id, disabled: running, onchange: () => store.set({ exportProfile: pr.id, exportOptions: {} }) }),
-            h('span.profile-body',
-              h('span.profile-name', pr.label, pr.experimental ? h('span.tag', 'ทดลอง') : null),
-              h('span.hint', pr.description))))),
+          h('div.profiles', profs.map((pr) => {
+            const ok = fits(pr);
+            const missing = needs.filter((n) => !(pr.handles || []).includes(n)).map((n) => NEED_LABEL[n]);
+            return h(`label.profile${pr.id === profile.id ? '.chosen' : ''}${ok ? '' : '.unfit'}`,
+              h('input', { type: 'radio', name: 'profile', value: pr.id, checked: pr.id === profile.id, disabled: running || !ok, onchange: () => store.set({ exportProfile: pr.id, exportOptions: {} }) }),
+              h('span.profile-body',
+                h('span.profile-name', pr.label, pr.experimental ? h('span.tag', 'ทดลอง') : null),
+                h('span.hint', pr.description),
+                ok ? null : h('span.hint.unfit-why', `ใช้ไม่ได้กับ${missing.join(' และ ')}ที่แต่งไว้`),
+                pr.id === profile.id && pr.render === 'gpu' ? h('span.hint', gpu == null ? 'กำลังตรวจตัวเข้ารหัสวิดีโอของ browser…' : gpu.ok
+                  ? 'browser นี้เข้ารหัส H.264 ได้ จะใช้การ์ดจอเมื่อเครื่องมี ไม่มีก็ใช้ CPU (ช้ากว่า)' : '') : null));
+          })),
           h('div.profile-options', optionsForm(profile)),
           h('label.field',
             h('span', 'ชื่อไฟล์'),
             h('input', { type: 'text', value: base, disabled: running, onchange: (e) => store.set({ outputBase: e.target.value.trim() }) })),
-          extrasForm(st, tl, plan, base, profile),
+          extrasForm(st, tl, plan, base, profile, ext),
           h('p.hint', toFolder ? `บันทึกลงโฟลเดอร์ output ใน “${st.source.name}”` : 'ไฟล์จะถูกดาวน์โหลดผ่าน browser'),
           h('div.export-actions',
             running
               ? h('button.secondary', { type: 'button', onclick: cancel }, icon('x', 16), 'ยกเลิก')
-              : h('button.primary.big', { type: 'button', disabled: plan.parts.length === 0, onclick: start }, icon('download', 18), plan.parts.length > 1 ? `ส่งออก ${plan.parts.length} ไฟล์` : 'ส่งออก')),
+              : h('button.primary.big', { type: 'button', disabled: plan.parts.length === 0 || (profile.render === 'gpu' && gpu && !gpu.ok), onclick: start }, icon('download', 18), plan.parts.length > 1 ? `ส่งออก ${plan.parts.length} ไฟล์` : 'ส่งออก')),
           progressBox,
           error ? h('p.warn.pre', icon('alert', 16), error) : null,
           results ? h('div.results',
@@ -278,14 +355,14 @@ export function mount(root, app) {
                 dl ? h('a.button.secondary.small', { href: dl.url, download: r.name }, icon('download', 15), 'บันทึก') : null);
             }))) : null)),
       h('div.next-bar',
-        h('button.ghost', { type: 'button', disabled: running, onclick: () => app.go('review') }, icon('arrowLeft', 16), 'ตรวจจุดตัด'),
+        h('button.ghost', { type: 'button', disabled: running, onclick: () => app.go('compose') }, icon('arrowLeft', 16), 'กลับไปแต่ง'),
         h('span')));
     renderProgress();
   }
 
   render();
   // re-render only for state this screen shows: an autosave tick must not rebuild a field being typed in
-  const WATCH = ['edit', 'arrange', 'exportProfile', 'exportOptions', 'exportExtras', 'outputBase', 'videos', 'transcript', 'anchors', 'anchorMode', 'compat', 'source'];
+  const WATCH = ['edit', 'arrange', 'compose', 'exportProfile', 'exportOptions', 'exportExtras', 'outputBase', 'videos', 'transcript', 'anchors', 'anchorMode', 'compat', 'source'];
   let seen = WATCH.map((k) => store.get()[k]);
   const unsub = store.subscribe((st) => {
     const now = WATCH.map((k) => st[k]);

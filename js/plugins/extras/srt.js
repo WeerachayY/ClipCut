@@ -10,8 +10,9 @@ export default {
   available: ({ spans }) => spans.length > 0,
   unavailableHint: 'ต้องมี transcript',
   options: [{ key: 'speakers', label: 'ใส่ชื่อผู้พูด', type: 'checkbox', default: true }],
-  build({ plan, spans, names, options }) {
-    return plan.parts.map((part, i) => ({
+  build({ plan, program, spans, names, options }) {
+    // with speed changes the captions follow the program (core/program.js): its clock is the video's
+    return (program || plan).parts.map((part, i) => ({
       name: names[i].replace(/\.[^.]+$/, '.srt'),
       // BOM: some Windows players read UTF-8 captions as gibberish without it
       data: `﻿${toSrt(partCues(part, spans, { speakers: options.speakers !== false }))}`,

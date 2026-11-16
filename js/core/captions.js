@@ -41,15 +41,21 @@ export function twoLines(text, max = 42) {
  * @returns {{start:number,end:number,text:string}[]}  times in the part's own clock
  */
 export function partCues(part, spans, { speakers = true, maxChars = 84 } = {}) {
+  // segments of a plan part (straight copies) or of a program part (with speed changes, core/program.js)
   let off = 0;
-  const segs = part.segments.map((s) => { const r = { g0: s.globalStart, g1: s.globalStart + s.duration, o0: off }; off += s.duration; return r; });
+  const segs = part.segments.map((s) => {
+    if (s.map) return { g0: s.srcStart, g1: s.srcEnd, out: (g) => s.partStart + s.map.toOut(g - s.pieceStart) - s.outOffset };
+    const o0 = off;
+    off += s.duration;
+    return { g0: s.globalStart, g1: s.globalStart + s.duration, out: (g) => o0 + (g - s.globalStart) };
+  });
   const cues = [];
   for (const sp of spans) {
     const iv = [];
     for (const s of segs) {
       const a = Math.max(sp.start, s.g0);
       const b = Math.min(sp.end, s.g1);
-      if (b - a > 0.05) iv.push([s.o0 + a - s.g0, s.o0 + b - s.g0]);
+      if (b - a > 0.05) iv.push([s.out(a), s.out(b)]);
     }
     // a line that runs across a cut is continuous in the output: one cue
     const merged = [];
